@@ -14,11 +14,11 @@ class MotorControlType(Enum):
 
 
 class Robot:
-    # def __init__(self, device_name: str, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
-    def __init__(self, dynamixel, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
+    def __init__(self, device_name: str, baudrate=1_000_000, servo_ids=[0, 1, 2, 3, 4, 5]):
+    # def __init__(self, dynamixel, baudrate=1_000_000, servo_ids=[1, 2, 3, 4, 5]):
         self.servo_ids = servo_ids
-        self.dynamixel = dynamixel
-        # self.dynamixel = Dynamixel.Config(baudrate=baudrate, device_name=device_name).instantiate()
+        # self.dynamixel = dynamixel
+        self.dynamixel = Dynamixel.Config(baudrate=baudrate, device_name=device_name).instantiate()
         self.position_reader = GroupSyncRead(
             self.dynamixel.portHandler,
             self.dynamixel.packetHandler,
@@ -165,11 +165,48 @@ class Robot:
         self.motor_control_state = MotorControlType.POSITION_CONTROL
 
 
-if __name__ == "__main__":
-    robot = Robot(device_name='/dev/tty.usbmodem57380045631')
+import pickle
+import time
+
+def record(robot, save=True):
     robot._disable_torque()
-    for _ in range(10000):
-        s = time.time()
-        pos = robot.read_position()
-        elapsed = time.time() - s
-        print(f'read took {elapsed} pos {pos}')
+
+    try:
+        actions = []
+        while True:
+            s = time.time()
+            pos = robot.read_position()
+            elapsed = time.time() - s
+            actions.append(pos)
+            print(f'read took {elapsed} pos {pos}')
+            time.sleep(1/50)
+    except KeyboardInterrupt:
+        print('writing file')
+        if save:
+            pickle.dump(actions, open('actions.pkl', 'wb'))
+
+
+def replay(robot):
+    robot._enable_torque()
+
+    actions = pickle.load(open('actions.pkl', 'rb'))
+    robot.set_goal_pos(actions[0])
+    time.sleep(3)
+
+    for action in actions:
+        robot.set_goal_pos(action)
+        time.sleep(1/50)
+
+if __name__ == "__main__":
+    robot = Robot(device_name='/dev/ttyACM0')
+    import sys
+
+    if sys.argv[1] == 'record':
+        record(robot)
+    elif sys.argv[1] == 'move':
+        record(robot, save=False)
+    else:
+        robot._enable_torque()
+        print('playing')
+        time.sleep(3)
+        replay(robot)
