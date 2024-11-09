@@ -193,9 +193,10 @@ def replay(robot):
     robot.set_goal_pos(actions[0])
     time.sleep(3)
 
-    for action in actions:
-        robot.set_goal_pos(action)
-        time.sleep(1/50)
+    while True:
+        for action in actions:
+            robot.set_goal_pos(action)
+            time.sleep(1/50)
 
 if __name__ == "__main__":
     robot = Robot(device_name='/dev/ttyACM0')
