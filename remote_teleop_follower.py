@@ -1,12 +1,10 @@
 from robot import Robot
-import socket
-import json
-import cv2
-import numpy as np
-import time
+from robot_env import RobotEnv
 
+# Initialize the robot and environment
 follower = Robot(device_name='/dev/ttyACM0')
 follower._enable_torque()
+env = RobotEnv()
 
 # Set up server details
 HOST = '0.0.0.0'  # Listen on all network interfaces
