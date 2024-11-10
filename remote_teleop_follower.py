@@ -19,10 +19,6 @@ server_socket.listen(1)  # Listen for incoming connections
 
 print(f"Server listening on {HOST}:{PORT}...")
 
-# Accept a connection
-conn, addr = server_socket.accept()
-print(f"Connected by {addr}")
-
 # Add webcam setup
 cap = cv2.VideoCapture(0)  # 0 is usually the built-in webcam
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -76,5 +72,4 @@ try:
         time.sleep(0.03)  # ~30fps
 finally:
     cap.release()
-    conn.close()
     server_socket.close()
