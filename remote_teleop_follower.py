@@ -3,6 +3,7 @@ import socket
 import json
 import cv2
 import numpy as np
+import time
 
 follower = Robot(device_name='/dev/ttyACM0')
 follower._enable_torque()
@@ -30,47 +31,49 @@ cap.set(cv2.CAP_PROP_FPS, 30)
 
 try:
     while True:
-        data = conn.recv(1024)  # Receive up to 1024 bytes
-        if not data:
-            break
+        # Check for any incoming data (non-blocking)
         try:
-            # Decode and load JSON
-            json_data = json.loads(data.decode())
-            # print("Received JSON data:", json_data)
-            action = json_data['position']
-            # action = follower.read_position()
-            # print(follower.read_position())
-            follower.set_goal_pos(action)
-            
-            # Read current position
-            current_pos = follower.read_position()
-            
-            # Capture and send frame
-            ret, frame = cap.read()
-            if ret:
-                # Compress frame to JPEG
-                _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                # Convert to bytes and get size
-                img_bytes = img_encoded.tobytes()
-                size = len(img_bytes)
-                
-                # Create response packet with both position and image
-                response = {
-                    'position': current_pos,
-                    'image_size': size
-                }
-                
-                # Send JSON header first
-                header = json.dumps(response).encode()
-                header_size = len(header)
-                
-                # Send header size, header, then image data
-                conn.send(header_size.to_bytes(4, byteorder='big'))
-                conn.send(header)
-                conn.send(img_bytes)
-                
+            conn.setblocking(0)  # Make socket non-blocking
+            data = conn.recv(1024)
+            if data:
+                # Decode and load JSON
+                json_data = json.loads(data.decode())
+                if 'position' in json_data:
+                    follower.set_goal_pos(json_data['position'])
+        except socket.error:
+            # No data received, that's okay
+            pass
         except json.decoder.JSONDecodeError:
             print("Received invalid JSON data")
+            
+        # Always read and send current state
+        current_pos = follower.read_position()
+        
+        # Capture and send frame
+        ret, frame = cap.read()
+        if ret:
+            # Compress frame to JPEG
+            _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            img_bytes = img_encoded.tobytes()
+            size = len(img_bytes)
+            
+            # Create response packet with both position and image
+            response = {
+                'position': current_pos,
+                'image_size': size
+            }
+            
+            # Send JSON header first
+            header = json.dumps(response).encode()
+            header_size = len(header)
+            
+            # Send header size, header, then image data
+            conn.send(header_size.to_bytes(4, byteorder='big'))
+            conn.send(header)
+            conn.send(img_bytes)
+            
+        # Add a small sleep to prevent overwhelming the network
+        time.sleep(0.03)  # ~30fps
 finally:
     cap.release()
     conn.close()
