@@ -5,6 +5,7 @@ import numpy as np
 import threading
 from typing import Tuple, Optional
 from dataclasses import dataclass
+import time
 
 import ikpy
 from ikpy.chain import Chain
@@ -128,6 +129,21 @@ class RobotEnv:
         self.latest_observation = Observation(None, None, None)
         self._lock = threading.Lock()
         
+    def _receive_sized_message(self, sock):
+        """Helper method to receive a size-prefixed message."""
+        size_bytes = sock.recv(4)
+        if not size_bytes:
+            raise ConnectionError("Connection closed by server")
+        size = int.from_bytes(size_bytes, byteorder='big')
+        
+        data = b''
+        while len(data) < size:
+            chunk = sock.recv(min(size - len(data), 4096))
+            if not chunk:
+                raise ConnectionError("Connection closed while receiving data")
+            data += chunk
+        return data
+        
     def connect(self):
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client_socket.connect((self.host, self.port))
@@ -139,37 +155,46 @@ class RobotEnv:
     def _update_loop(self):
         while self.running:
             try:
-                # Receive and process data
-                header_size_bytes = self.client_socket.recv(4)
-                header_size = int.from_bytes(header_size_bytes, byteorder='big')
-                
-                header_data = self.client_socket.recv(header_size)
-                header = json.loads(header_data)
-                
+                # Receive position data
+                position_data = self._receive_sized_message(self.client_socket)
+                header = json.loads(position_data.decode())
                 follower_joints = header['position']
-                image_size = header['image_size']
-
-                # Receive image data
-                img_data = b''
-                while len(img_data) < image_size:
-                    chunk = self.client_socket.recv(min(image_size - len(img_data), 4096))
-                    if not chunk:
-                        break
-                    img_data += chunk
-
-                # Process image
-                img_np = np.frombuffer(img_data, dtype=np.uint8)
-                frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
-
-                follower_pose = joints_to_pose(follower_joints)
                 
-                # Update latest observation thread-safely
-                with self._lock:
-                    self.latest_observation = Observation(frame, follower_pose, follower_joints)
+                # Receive image data
+                image_data = self._receive_sized_message(self.client_socket)
+                
+                # Process image
+                img_np = np.frombuffer(image_data, dtype=np.uint8)
+                frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+                
+                if frame is not None:
+                    follower_pose = joints_to_pose(follower_joints)
                     
+                    # Update latest observation thread-safely
+                    with self._lock:
+                        self.latest_observation = Observation(frame, follower_pose, follower_joints)
+                        
+            except (ConnectionError, json.JSONDecodeError) as e:
+                print(f"Connection error in update loop: {e}")
+                self._attempt_reconnect()
             except Exception as e:
                 print(f"Error in update loop: {e}")
+                self._attempt_reconnect()
+                
+    def _attempt_reconnect(self):
+        """Helper method to handle reconnection."""
+        while self.running:
+            try:
+                print("Attempting to reconnect...")
+                if self.client_socket:
+                    self.client_socket.close()
+                self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.client_socket.connect((self.host, self.port))
+                print("Reconnected successfully")
                 break
+            except Exception as e:
+                print(f"Reconnection failed: {e}")
+                time.sleep(2)  # Wait before retrying
                 
     def get_observation(self) -> Observation:
         with self._lock:
@@ -181,10 +206,13 @@ class RobotEnv:
             try:
                 json_data = json.dumps(data).encode()
                 length = len(json_data)
+                # Send size header first
                 self.client_socket.sendall(length.to_bytes(4, byteorder='big'))
+                # Then send the actual data
                 self.client_socket.sendall(json_data)
             except Exception as e:
                 print(f"Error sending message: {e}")
+                self._attempt_reconnect()
     
     def send_joints(self, position: float):
         """Send joint positions to the robot."""
