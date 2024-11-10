@@ -4,6 +4,8 @@ import json
 import cv2
 import numpy as np
 import time
+import threading
+from queue import Queue
 
 follower = Robot(device_name='/dev/ttyACM0')
 follower._enable_torque()
@@ -31,28 +33,43 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
+def receive_position_data(conn, follower, running):
+    while running[0]:
+        try:
+            # First receive the size header (4 bytes)
+            size_data = conn.recv(4, socket.MSG_WAITALL)
+            if not size_data:  # Connection closed
+                break
+                
+            msg_size = int.from_bytes(size_data, byteorder='big')
+            # Then receive the actual message
+            data = conn.recv(msg_size, socket.MSG_WAITALL)
+            if not data:  # Connection closed
+                break
+                
+            json_data = json.loads(data.decode())
+            if 'position' in json_data:
+                follower.set_goal_pos(json_data['position'])
+                
+        except (BlockingIOError, socket.error, ConnectionResetError) as e:
+            print(f"Position receive error: {e}")
+            break
+    print("Position receive thread ended")
+
 try:
     conn, addr = accept_connection()
+    running = [True]  # Using list to allow modification in threads
+    
+    # Start position receiving thread
+    position_thread = threading.Thread(
+        target=receive_position_data, 
+        args=(conn, follower, running)
+    )
+    position_thread.start()
+    
     while True:
         try:
-            # Try to receive data without blocking
-            conn.setblocking(0)
-            try:
-                # First receive the size header (4 bytes)
-                size_data = conn.recv(4)
-                if size_data:
-                    msg_size = int.from_bytes(size_data, byteorder='big')
-                    # Then receive the actual message
-                    data = conn.recv(msg_size)
-                    if data:
-                        json_data = json.loads(data.decode())
-                        if 'position' in json_data:
-                            follower.set_goal_pos(json_data['position'])
-            except (BlockingIOError, socket.error):
-                # No data available, continue with sending updates
-                pass
-
-            # Always send current state and image
+            # Main thread handles only camera and position updates
             current_pos = follower.read_position()
             ret, frame = cap.read()
             
@@ -78,20 +95,44 @@ try:
                 except (BrokenPipeError, ConnectionResetError):
                     print("Client disconnected. Waiting for new connection...")
                     conn.close()
+                    # Stop the position thread
+                    running[0] = False
+                    position_thread.join()
+                    # Get new connection
                     conn, addr = accept_connection()
+                    # Restart position thread
+                    running[0] = True
+                    position_thread = threading.Thread(
+                        target=receive_position_data, 
+                        args=(conn, follower, running)
+                    )
+                    position_thread.start()
             
-            # Add a small sleep to prevent overwhelming the network
-            time.sleep(0.03)  # ~30fps
+            # Reduced sleep time
+            time.sleep(0.01)  # ~100fps max
             
         except Exception as e:
-            print(f"Error: {e}")
-            # If connection is lost, try to reconnect
+            print(f"Error in main loop: {e}")
             if isinstance(e, (ConnectionResetError, BrokenPipeError)):
                 print("Client disconnected. Waiting for new connection...")
                 conn.close()
+                # Stop the position thread
+                running[0] = False
+                position_thread.join()
+                # Get new connection
                 conn, addr = accept_connection()
+                # Restart position thread
+                running[0] = True
+                position_thread = threading.Thread(
+                    target=receive_position_data, 
+                    args=(conn, follower, running)
+                )
+                position_thread.start()
 
 finally:
+    running[0] = False  # Stop the position thread
+    if 'position_thread' in locals():
+        position_thread.join()
     cap.release()
     if 'conn' in locals():
         conn.close()
