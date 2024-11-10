@@ -19,62 +19,75 @@ server_socket.listen(1)  # Listen for incoming connections
 
 print(f"Server listening on {HOST}:{PORT}...")
 
-# Accept a connection
-conn, addr = server_socket.accept()
-print(f"Connected by {addr}")
+def accept_connection():
+    conn, addr = server_socket.accept()
+    print(f"Connected by {addr}")
+    return conn, addr
 
-# Add webcam setup
-cap = cv2.VideoCapture(0)  # 0 is usually the built-in webcam
+# Move webcam setup here, before the main loop
+cap = cv2.VideoCapture(0)
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
 try:
+    conn, addr = accept_connection()
     while True:
-        # Check for any incoming data (non-blocking)
         try:
-            conn.setblocking(0)  # Make socket non-blocking
+            # Check for any incoming data (non-blocking)
+            conn.setblocking(0)
             data = conn.recv(1024)
             if data:
                 # Decode and load JSON
                 json_data = json.loads(data.decode())
                 if 'position' in json_data:
                     follower.set_goal_pos(json_data['position'])
-        except socket.error:
-            # No data received, that's okay
+                    
+            # Always read and send current state
+            current_pos = follower.read_position()
+            
+            # Capture and send frame
+            ret, frame = cap.read()
+            if ret:
+                # Compress frame to JPEG
+                _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                img_bytes = img_encoded.tobytes()
+                size = len(img_bytes)
+                
+                # Create response packet with both position and image
+                response = {
+                    'position': current_pos,
+                    'image_size': size
+                }
+                
+                # Send JSON header first
+                header = json.dumps(response).encode()
+                header_size = len(header)
+                
+                # Wrap the sending operations in try-except
+                try:
+                    conn.send(header_size.to_bytes(4, byteorder='big'))
+                    conn.send(header)
+                    conn.send(img_bytes)
+                except (BrokenPipeError, ConnectionResetError):
+                    print("Client disconnected. Waiting for new connection...")
+                    conn.close()
+                    conn, addr = accept_connection()
+                    
+            # Add a small sleep to prevent overwhelming the network
+            time.sleep(0.03)  # ~30fps
+        except socket.error as e:
+            if isinstance(e, ConnectionResetError):
+                print("Client disconnected. Waiting for new connection...")
+                conn.close()
+                conn, addr = accept_connection()
+            # Ignore other socket errors (no data available)
             pass
         except json.decoder.JSONDecodeError:
             print("Received invalid JSON data")
             
-        # Always read and send current state
-        current_pos = follower.read_position()
-        
-        # Capture and send frame
-        ret, frame = cap.read()
-        if ret:
-            # Compress frame to JPEG
-            _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-            img_bytes = img_encoded.tobytes()
-            size = len(img_bytes)
-            
-            # Create response packet with both position and image
-            response = {
-                'position': current_pos,
-                'image_size': size
-            }
-            
-            # Send JSON header first
-            header = json.dumps(response).encode()
-            header_size = len(header)
-            
-            # Send header size, header, then image data
-            conn.send(header_size.to_bytes(4, byteorder='big'))
-            conn.send(header)
-            conn.send(img_bytes)
-            
-        # Add a small sleep to prevent overwhelming the network
-        time.sleep(0.03)  # ~30fps
 finally:
     cap.release()
-    conn.close()
+    if 'conn' in locals():
+        conn.close()
     server_socket.close()
