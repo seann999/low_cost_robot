@@ -22,6 +22,7 @@ print(f"Server listening on {HOST}:{PORT}...")
 def accept_connection():
     conn, addr = server_socket.accept()
     print(f"Connected by {addr}")
+    conn.setblocking(1)  # Make sure connection is blocking by default
     return conn, addr
 
 # Move webcam setup here, before the main loop
@@ -34,58 +35,62 @@ try:
     conn, addr = accept_connection()
     while True:
         try:
-            # Check for any incoming data (non-blocking)
+            # Try to receive data without blocking
             conn.setblocking(0)
-            data = conn.recv(1024)
-            if data:
-                # Decode and load JSON
-                json_data = json.loads(data.decode())
-                if 'position' in json_data:
-                    follower.set_goal_pos(json_data['position'])
-                    
-            # Always read and send current state
+            try:
+                # First receive the size header (4 bytes)
+                size_data = conn.recv(4)
+                if size_data:
+                    msg_size = int.from_bytes(size_data, byteorder='big')
+                    # Then receive the actual message
+                    data = conn.recv(msg_size)
+                    if data:
+                        json_data = json.loads(data.decode())
+                        if 'position' in json_data:
+                            follower.set_goal_pos(json_data['position'])
+            except (BlockingIOError, socket.error):
+                # No data available, continue with sending updates
+                pass
+
+            # Always send current state and image
             current_pos = follower.read_position()
-            
-            # Capture and send frame
             ret, frame = cap.read()
+            
             if ret:
                 # Compress frame to JPEG
                 _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 img_bytes = img_encoded.tobytes()
-                size = len(img_bytes)
                 
-                # Create response packet with both position and image
+                # Create response packet
                 response = {
                     'position': current_pos,
-                    'image_size': size
                 }
+                response_json = json.dumps(response).encode()
                 
-                # Send JSON header first
-                header = json.dumps(response).encode()
-                header_size = len(header)
-                
-                # Wrap the sending operations in try-except
                 try:
-                    conn.send(header_size.to_bytes(4, byteorder='big'))
-                    conn.send(header)
+                    # Send position data with size header
+                    conn.send(len(response_json).to_bytes(4, byteorder='big'))
+                    conn.send(response_json)
+                    
+                    # Send image data with size header
+                    conn.send(len(img_bytes).to_bytes(4, byteorder='big'))
                     conn.send(img_bytes)
                 except (BrokenPipeError, ConnectionResetError):
                     print("Client disconnected. Waiting for new connection...")
                     conn.close()
                     conn, addr = accept_connection()
-                    
+            
             # Add a small sleep to prevent overwhelming the network
             time.sleep(0.03)  # ~30fps
-        except socket.error as e:
-            if isinstance(e, ConnectionResetError):
+            
+        except Exception as e:
+            print(f"Error: {e}")
+            # If connection is lost, try to reconnect
+            if isinstance(e, (ConnectionResetError, BrokenPipeError)):
                 print("Client disconnected. Waiting for new connection...")
                 conn.close()
                 conn, addr = accept_connection()
-            # Ignore other socket errors (no data available)
-            pass
-        except json.decoder.JSONDecodeError:
-            print("Received invalid JSON data")
-            
+
 finally:
     cap.release()
     if 'conn' in locals():
