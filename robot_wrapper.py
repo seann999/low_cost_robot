@@ -98,10 +98,8 @@ def cam_move_to_ee(cam_mat, pos, rot6d):
     trans[:3, :3] = rot6d_to_mat(rot6d)
     cam_move_to = cam_mat @ trans
     ee_move_to = cam_move_to @ np.linalg.inv(camera2gripper)
-    move_pos = ee_move_to[:3, 3]
-    move_rot = R.from_matrix(ee_move_to[:3, :3]).as_quat()
 
-    return cam_move_to, ee_move_to, np.concatenate([move_pos, move_rot])
+    return cam_move_to, ee_move_to
 
 
 def joints_to_pose(joints, camera_frame=False):
@@ -142,8 +140,9 @@ def pose_to_joints(pose, gripper_joint, initial_position=None):
 @dataclass
 class Observation:
     image: Optional[np.ndarray]
-    ee_pose: Optional[np.ndarray]
     joints: Optional[np.ndarray]
+    ee_pose: Optional[np.ndarray]
+    cam_pose: Optional[np.ndarray]
     
 class RobotEnv:
     def __init__(self, host: str = '192.168.0.231', port: int = 5000):
@@ -151,7 +150,7 @@ class RobotEnv:
         self.port = port
         self.client_socket = None
         self.running = False
-        self.latest_observation = Observation(None, None, None)
+        self.latest_observation = Observation(None, None, None, None)
         self._lock = threading.Lock()
         
     def _receive_sized_message(self, sock):
@@ -193,11 +192,12 @@ class RobotEnv:
                 frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
                 
                 if frame is not None:
-                    follower_pose = joints_to_pose(follower_joints, camera_frame=True)
+                    ee_pose = joints_to_pose(follower_joints, camera_frame=False)
+                    cam_pose = joints_to_pose(follower_joints, camera_frame=True)
                     
                     # Update latest observation thread-safely
                     with self._lock:
-                        self.latest_observation = Observation(frame, follower_pose, follower_joints)
+                        self.latest_observation = Observation(frame, follower_joints, ee_pose, cam_pose)
                         
             except (ConnectionError, json.JSONDecodeError) as e:
                 print(f"Connection error in update loop: {e}")
@@ -279,6 +279,15 @@ class RobotEnv:
     def send_joints(self, position: float):
         """Send joint positions to the robot."""
         self._send_message({"position": position})
+
+    def send_action(self, joints, base):
+        self._send_message({
+            "position": joints,
+            "base": base
+        })
+
+    def stop_base(self):
+        self._send_message({"base": [0, 0, 0]})
             
     def close(self):
         self.running = False
