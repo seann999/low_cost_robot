@@ -21,7 +21,7 @@ def main():
             # leader_position_rec = pose_to_joints(leader_pose, leader_position)
             # print(leader_position_rec)
 
-            # env.send_joints(leader_position)
+            env.send_joints(leader_position)
             
             # Get latest observation
             obs = env.get_observation()
@@ -33,7 +33,7 @@ def main():
                     break
             
             print("Leader position:", leader_position)
-            print("Follower position:", obs.ee_pose)
+            print("Follower position:", obs.joints)
             
     except KeyboardInterrupt:
         print("\nExiting gracefully...")

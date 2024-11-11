@@ -10,32 +10,33 @@ import time
 import ikpy
 from ikpy.chain import Chain
 from ikpy.link import OriginLink, URDFLink
+ikpy.inverse_kinematics.ORIENTATION_COEFF = 0.01
 import xml.etree.ElementTree as ET
 from scipy.spatial.transform import Rotation as R
+
+from umi.common.pose_util import pose_to_mat, mat_to_pose, mat_to_pose10d, rot6d_to_mat
 
 
 camera2gripper = np.array([
     [
         0.9997668505539576,
         -0.019970828271681517,
-        -0.008210392899446018, 0
+        -0.008210392899446018, 0.00018299471587136708,
     ],
     [
         -0.021388860005435672,
         -0.8638202079680002,
-        -0.503345969462147, 0
+        -0.503345969462147, 0.06175676142391705,
     ],
     [
         0.0029599326154731358,
         0.5034042255725152,
-        -0.864045962015128, 0
+        -0.864045962015128, -0.00888269351076889,
     ],
     [
-        0.00018299471587136708,
-        0.06175676142391705,
-        -0.00888269351076889, 1
+        0, 0, 0, 1
     ]
-]).T
+])
 
 
 def modify_urdf_for_ikpy(urdf_file):
@@ -74,6 +75,10 @@ modified_urdf = modify_urdf_for_ikpy("low_cost_robot.urdf")
 # Load the modified URDF file
 robot_arm_chain = Chain.from_urdf_file(modified_urdf)
 
+from plotter import KinematicsPlotter
+plotter = KinematicsPlotter()
+plotter.initialize_plot(plot_id="follower")
+
 
 def pose_to_matrix(pose):
     """Convert a pose (position and orientation) to a 4x4 transformation matrix."""
@@ -85,31 +90,51 @@ def pose_to_matrix(pose):
     return matrix
 
 
-def joints_to_pose(joints):
+def cam_move_to_ee(cam_mat, pos, rot6d):
+    # cam_mat = ee_mat @ camera2gripper
+
+    trans = np.eye(4)
+    trans[:3, 3] = pos
+    trans[:3, :3] = rot6d_to_mat(rot6d)
+    cam_move_to = cam_mat @ trans
+    ee_move_to = cam_move_to @ np.linalg.inv(camera2gripper)
+    move_pos = ee_move_to[:3, 3]
+    move_rot = R.from_matrix(ee_move_to[:3, :3]).as_quat()
+
+    return cam_move_to, ee_move_to, np.concatenate([move_pos, move_rot])
+
+
+def joints_to_pose(joints, camera_frame=False):
     raw_state = np.concatenate([[0], joints[:-1]])
     joints_float = (np.array(raw_state) - 2048) / 2048 * np.pi
     pose_matrix = robot_arm_chain.forward_kinematics(joints_float)
-    rot_quat = R.from_matrix(pose_matrix[:3, :3]).as_quat()
 
-    pose = np.concatenate([pose_matrix[:3, -1], rot_quat, joints[-1:]])
-    return pose
+    if camera_frame:
+        pose_matrix = pose_matrix @ camera2gripper
+
+    return pose_matrix
 
 
-def pose_to_joints(pose, initial_position=None):
-    if initial_position is not None:
-        initial_position = (np.array(initial_position) - 2048) / 2048 * np.pi
-        initial_position = np.concatenate([[0], initial_position[:-1]])
-
+def pose_to_joints(pose, gripper_joint, initial_position=None):
     pose_matrix = pose_to_matrix(pose[:7])
+
+    if initial_position is not None:
+        initial_position_angles = (np.array(initial_position) - 2048) / 2048 * np.pi
+        initial_position_angles = np.concatenate([[0], initial_position_angles[:-1]])
+
+        # plotter.update_plot(robot_arm_chain, initial_position_angles, plot_id="leader", target_matrix=joints_to_pose(initial_position))
+
     joints = robot_arm_chain.inverse_kinematics(
         target_position=pose_matrix[:3, -1],
         target_orientation=pose_matrix[:3, :3],
         orientation_mode="all",
-        initial_position=initial_position)
+        initial_position=initial_position_angles)
+
+    # plotter.update_plot(robot_arm_chain, joints, plot_id="follower", target_matrix=pose_matrix)
 
     joints = np.array(joints) / np.pi * 2048 + 2048
     joints[:-1] = joints[1:]
-    joints[-1] = pose[-1]
+    joints[-1] = gripper_joint
     joints = joints.astype(np.int32).tolist()
 
     return joints
@@ -118,7 +143,7 @@ def pose_to_joints(pose, initial_position=None):
 class Observation:
     image: Optional[np.ndarray]
     ee_pose: Optional[np.ndarray]
-    ee_joints: Optional[np.ndarray]
+    joints: Optional[np.ndarray]
     
 class RobotEnv:
     def __init__(self, host: str = '192.168.0.231', port: int = 5000):
@@ -168,7 +193,7 @@ class RobotEnv:
                 frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
                 
                 if frame is not None:
-                    follower_pose = joints_to_pose(follower_joints)
+                    follower_pose = joints_to_pose(follower_joints, camera_frame=True)
                     
                     # Update latest observation thread-safely
                     with self._lock:
@@ -199,7 +224,44 @@ class RobotEnv:
     def get_observation(self) -> Observation:
         with self._lock:
             return self.latest_observation
+
+    def move_to_joints(self, joints, duration=3.0):
+        """Move robot from current joints to target joints over specified time.
+        
+        Args:
+            joints: Target joint positions
+            time: Duration of movement in seconds
+        """
+        # Wait for valid observation
+        while True:
+            current_obs = self.get_observation()
+            if current_obs.joints is not None:
+                break
+            print("Waiting for valid joint observation...")
+            time.sleep(0.1)
             
+        start_joints = np.array(current_obs.joints)
+        target_joints = np.array(joints)
+        
+        # Calculate number of steps for 10Hz
+        hz = 10
+        steps = int(duration * hz)
+        step_time = 1.0 / hz
+        
+        # Linear interpolation between current and target joints
+        for i in range(steps + 1):
+            t = i / steps  # Interpolation factor (0 to 1)
+            interpolated_joints = start_joints + t * (target_joints - start_joints)
+            
+            # Convert to integers
+            interpolated_joints = np.round(interpolated_joints).astype(np.int32)
+            
+            # Send interpolated joints
+            self.send_joints(interpolated_joints.tolist())
+            
+            # Sleep to maintain 10Hz
+            time.sleep(step_time)
+    
     def _send_message(self, data: dict):
         """Send a length-prefixed JSON message."""
         if self.client_socket:
