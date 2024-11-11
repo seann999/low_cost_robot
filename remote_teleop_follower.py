@@ -61,7 +61,8 @@ def receive_position_data(conn, follower, running):
                 
         except (BlockingIOError, socket.error, ConnectionResetError) as e:
             print(f"Position receive error: {e}")
-            break
+            continue
+            
     print("Position receive thread ended")
 
 try:
