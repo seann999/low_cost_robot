@@ -6,7 +6,12 @@ import numpy as np
 import time
 import threading
 from queue import Queue
+import sys
+sys.path.append('/home/pi/TurboPi/')
+import HiwonderSDK.mecanum as mecanum
 
+
+chassis = mecanum.MecanumChassis()
 follower = Robot(device_name='/dev/ttyACM0')
 follower._enable_torque()
 
@@ -50,10 +55,14 @@ def receive_position_data(conn, follower, running):
             json_data = json.loads(data.decode())
             if 'position' in json_data:
                 follower.set_goal_pos(json_data['position'])
+            if 'base' in json_data:
+                magnitude, direction, skew = json_data['base']
+                chassis.set_velocity(magnitude, direction, skew)
                 
         except (BlockingIOError, socket.error, ConnectionResetError) as e:
             print(f"Position receive error: {e}")
-            break
+            continue
+            
     print("Position receive thread ended")
 
 try:
