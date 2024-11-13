@@ -102,11 +102,17 @@ def update_visualization(transform_matrix):
     # Extract position and rotation
     position = transform_matrix[:3, 3]
     rotation_matrix = transform_matrix[:3, :3]
-    euler_angles = Rotation.from_matrix(rotation_matrix).as_euler('xyz', degrees=True)
+    up_vector = np.array([0, 1, 0])
+    right_vector = rotation_matrix[:3, 0]
+    forward_vector = np.cross(right_vector, up_vector)
+    x_pos = position[2] # z -> x
+    y_pos = position[0] # x -> y
+    angle = np.arctan2(forward_vector[0], forward_vector[2])
     
     # Update history (only storing x, z position and y rotation)
-    position_history.append([position[0], position[2]])  # x and z only
-    angle_history.append(euler_angles[1])  # y rotation only
+    position_history.append([x_pos, y_pos])  # x and z only
+    # angle_history.append(euler_angles[1])  # y rotation only
+    angle_history.append(angle)
     if len(position_history) > history_length:
         position_history.pop(0)
         angle_history.pop(0)
@@ -127,7 +133,7 @@ def update_visualization(transform_matrix):
     # Draw current position and orientation
     if len(pos_array) > 0:
         # Scale position for visualization (adjust scale factor as needed)
-        scale = 20
+        scale = 100
         pos_x = int(center_x + pos_array[-1, 0] * scale)
         pos_z = int(center_y - pos_array[-1, 1] * scale)
         
@@ -140,7 +146,7 @@ def update_visualization(transform_matrix):
             cv2.line(image, pt1, pt2, (255, 255, 0), 1)
         
         # Draw phone orientation (arrow)
-        angle_rad = np.radians(ang_array[-1])
+        angle_rad = ang_array[-1]
         arrow_length = 30
         end_x = pos_x + int(arrow_length * np.cos(angle_rad))
         end_y = pos_z - int(arrow_length * np.sin(angle_rad))
