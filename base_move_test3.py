@@ -20,20 +20,28 @@ def main():
         goal_point, = ax.plot([], [], 'ro', label='Goal')    # Red dot for goal
         direction_arrow = ax.quiver([], [], [], [], color='b', scale=5)
         goal_arrow = ax.quiver([], [], [], [], color='r', scale=5)  # Add goal direction arrow
+
+        # Add text annotations right here, after setting up the plot but before the goal position
+        distance_text = ax.text(0.02, 0.95, '', transform=ax.transAxes)
+        yaw_text = ax.text(0.02, 0.90, '', transform=ax.transAxes)
+
+        input("Press Enter to continue...")
+
+        current_pose = env.tracker.get_latest_position()
+
+        goal_x = current_pose['x']
+        goal_y = current_pose['y']
+        goal_yaw = current_pose['yaw']
         
-        ax.set_xlim(-1, 1)
-        ax.set_ylim(-1, 1)
+        # Plot the goal position
+        goal_point.set_data([goal_x], [goal_y])
+
+        ax.set_xlim(goal_x - 1, goal_x + 1)
+        ax.set_ylim(goal_y - 1, goal_y + 1)
         ax.grid(True)
         ax.set_xlabel('X Position (m)')
         ax.set_ylabel('Y Position (m)')
         ax.legend()
-
-        goal_x = 0
-        goal_y = 0
-        goal_yaw = 0
-        
-        # Plot the goal position
-        goal_point.set_data([goal_x], [goal_y])
 
         while True:
             current_pose = env.tracker.get_latest_position()
@@ -57,9 +65,6 @@ def main():
             goal_dy = 0.2 * math.sin(goal_yaw)
             goal_arrow.set_offsets([[goal_x, goal_y]])
             goal_arrow.set_UVC(goal_dx, goal_dy)
-            
-            fig.canvas.draw()
-            fig.canvas.flush_events()
 
             # Calculate distance to goal
             dx = goal_x - curr_x
@@ -88,19 +93,30 @@ def main():
             rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
             
             # Calculate speed based on distance
-            if distance < 0.05:  # Very close to goal
+            if distance < 0.01:  # Very close to goal
                 speed = 0
                 # When stopped, focus on final orientation
-                if abs(yaw_diff) > 0.05:  # About 3 degrees
+                if abs(yaw_diff) > np.deg2rad(3):
                     rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
+                    if abs(rotation_speed) < 0.2:
+                        rotation_speed = 0.2 * np.sign(rotation_speed)
                 else:
                     rotation_speed = 0
             else:
-                speed = 90
+                # speed = 90
+                speed = min(90, max(20, distance * 500))
 
+            # Add the text updates right here, after calculating distance and yaw_diff but before sending commands
+            distance_text.set_text(f'Distance to goal: {distance:.3f} m')
+            yaw_text.set_text(f'Yaw difference: {math.degrees(yaw_diff):.1f}°')
+            
             print(speed, direction, rotation_speed)
             
             env.send_base([speed, direction, -rotation_speed])
+
+            # Add these two lines to update the plot
+            plt.draw()
+            plt.pause(0.001)  # Small pause to allow the plot to update
 
             time.sleep(0.1)
     except KeyboardInterrupt:
