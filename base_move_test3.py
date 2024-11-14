@@ -19,9 +19,10 @@ def main():
         robot_point, = ax.plot([], [], 'bo', label='Robot')  # Blue dot for robot
         goal_point, = ax.plot([], [], 'ro', label='Goal')    # Red dot for goal
         direction_arrow = ax.quiver([], [], [], [], color='b', scale=5)
+        goal_arrow = ax.quiver([], [], [], [], color='r', scale=5)  # Add goal direction arrow
         
-        ax.set_xlim(-2, 2)
-        ax.set_ylim(-2, 2)
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
         ax.grid(True)
         ax.set_xlabel('X Position (m)')
         ax.set_ylabel('Y Position (m)')
@@ -29,6 +30,7 @@ def main():
 
         goal_x = 0
         goal_y = 0
+        goal_yaw = 0
         
         # Plot the goal position
         goal_point.set_data([goal_x], [goal_y])
@@ -49,6 +51,12 @@ def main():
             dy = 0.2 * math.sin(curr_yaw)
             direction_arrow.set_offsets([[curr_x, curr_y]])
             direction_arrow.set_UVC(dx, dy)
+            
+            # Update goal direction arrow
+            goal_dx = 0.2 * math.cos(goal_yaw)
+            goal_dy = 0.2 * math.sin(goal_yaw)
+            goal_arrow.set_offsets([[goal_x, goal_y]])
+            goal_arrow.set_UVC(goal_dx, goal_dy)
             
             fig.canvas.draw()
             fig.canvas.flush_events()
@@ -71,15 +79,28 @@ def main():
             # Convert to robot's direction system (0 is left, 90 is forward)
             direction = relative_angle + 90
             
+            # Calculate rotation command (yaw control)
+            # Calculate the shortest angle difference between current and goal yaw
+            yaw_diff = goal_yaw - curr_yaw
+            yaw_diff = math.atan2(math.sin(yaw_diff), math.cos(yaw_diff))  # Normalize to [-pi, pi]
+            
+            # Convert to rotation command (-0.3 to 0.3)
+            rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
+            
             # Calculate speed based on distance
-            # Using a simple mapping: closer = slower
             if distance < 0.05:  # Very close to goal
                 speed = 0
+                # When stopped, focus on final orientation
+                if abs(yaw_diff) > 0.05:  # About 3 degrees
+                    rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
+                else:
+                    rotation_speed = 0
             else:
-                # speed = min(90, max(20, distance * 50))  # Scale with distance, but keep within [20, 90]
                 speed = 90
+
+            print(speed, direction, rotation_speed)
             
-            env.send_base([speed, direction, 0])
+            env.send_base([speed, direction, -rotation_speed])
 
             time.sleep(0.1)
     except KeyboardInterrupt:
