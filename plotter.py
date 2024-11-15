@@ -2,28 +2,13 @@ from ikpy.utils import geometry, plot as plot_utils
 from ikpy.utils.plot import plot_frame
 import numpy as np
 import matplotlib.pyplot as plt
+import json
+
+import ikpy
+ikpy.utils.plot.directions_colors = ["red", "green", "blue"]
 
 
-camera2gripper = np.array([
-    [
-        0.9997668505539576,
-        -0.019970828271681517,
-        -0.008210392899446018, 0.00018299471587136708,
-    ],
-    [
-        -0.021388860005435672,
-        -0.8638202079680002,
-        -0.503345969462147, 0.06175676142391705,
-    ],
-    [
-        0.0029599326154731358,
-        0.5034042255725152,
-        -0.864045962015128, -0.00888269351076889,
-    ],
-    [
-        0, 0, 0, 1
-    ]
-])
+camera2gripper = np.array(json.load(open('calibration/camera_to_ee.json'))['T_cam2gripper'])
 
 
 class KinematicsPlotter:
@@ -33,53 +18,54 @@ class KinematicsPlotter:
 
     def raw_plot_chain(self, chain, joints, ax, name="chain", other_frames=()):
         """Plot the chain with its rotation and translation axes"""
-        nodes = []
-        rotation_axes = []
-        translation_axes = []
+        if chain is not None:
+            nodes = []
+            rotation_axes = []
+            translation_axes = []
 
-        transformation_matrixes = chain.forward_kinematics(joints, full_kinematics=True)
+            transformation_matrixes = chain.forward_kinematics(joints, full_kinematics=True)
 
-        # Get nodes and orientations
-        for (index, link) in enumerate(chain.links):
-            (node, orientation) = geometry.from_transformation_matrix(transformation_matrixes[index])
-            nodes.append(node)
+            # Get nodes and orientations
+            for (index, link) in enumerate(chain.links):
+                (node, orientation) = geometry.from_transformation_matrix(transformation_matrixes[index])
+                nodes.append(node)
 
-            # Handle rotation axes
-            if link.has_rotation:
-                rotation_axis = link.get_rotation_axis()
-                if index == 0:
-                    rotation_axes.append((node, rotation_axis))
-                else:
-                    rotation_axes.append((node, geometry.homogeneous_to_cartesian_vectors(
-                        np.dot(transformation_matrixes[index - 1], rotation_axis))))
+                # Handle rotation axes
+                if link.has_rotation:
+                    rotation_axis = link.get_rotation_axis()
+                    if index == 0:
+                        rotation_axes.append((node, rotation_axis))
+                    else:
+                        rotation_axes.append((node, geometry.homogeneous_to_cartesian_vectors(
+                            np.dot(transformation_matrixes[index - 1], rotation_axis))))
 
-            # Handle translation axes
-            if link.has_translation:
-                translation_axis = link.get_translation_axis()
-                if index == 0:
-                    translation_axes.append((node, translation_axis))
-                else:
-                    translation_axes.append((node, geometry.homogeneous_to_cartesian_vectors(
-                        np.dot(transformation_matrixes[index - 1], translation_axis))))
+                # Handle translation axes
+                if link.has_translation:
+                    translation_axis = link.get_translation_axis()
+                    if index == 0:
+                        translation_axes.append((node, translation_axis))
+                    else:
+                        translation_axes.append((node, geometry.homogeneous_to_cartesian_vectors(
+                            np.dot(transformation_matrixes[index - 1], translation_axis))))
 
-        # Plot chain and nodes
-        lines = ax.plot([x[0] for x in nodes], [x[1] for x in nodes], 
-                       [x[2] for x in nodes], linewidth=5, label=name)
-        ax.scatter([x[0] for x in nodes], [x[1] for x in nodes], 
-                  [x[2] for x in nodes], s=55, c=lines[0].get_color())
+            # Plot chain and nodes
+            lines = ax.plot([x[0] for x in nodes], [x[1] for x in nodes], 
+                        [x[2] for x in nodes], linewidth=5, label=name)
+            ax.scatter([x[0] for x in nodes], [x[1] for x in nodes], 
+                    [x[2] for x in nodes], s=55, c=lines[0].get_color())
 
-        # Plot rotation and translation axes
-        for node, axe in rotation_axes:
-            ax.plot([node[0], axe[0]], [node[1], axe[1]], [node[2], axe[2]], 
-                   c=lines[0].get_color())
-        
-        for node, axe in translation_axes:
-            ax.plot([node[0], axe[0]], [node[1], axe[1]], [node[2], axe[2]], 
-                   c=lines[0].get_color(), linestyle='dotted', linewidth=2.5)
+            # Plot rotation and translation axes
+            for node, axe in rotation_axes:
+                ax.plot([node[0], axe[0]], [node[1], axe[1]], [node[2], axe[2]], 
+                    c=lines[0].get_color())
+            
+            for node, axe in translation_axes:
+                ax.plot([node[0], axe[0]], [node[1], axe[1]], [node[2], axe[2]], 
+                    c=lines[0].get_color(), linestyle='dotted', linewidth=2.5)
 
-        # Plot frames
-        camera_frame = np.dot(transformation_matrixes[-1], camera2gripper)
-        plot_frame(camera_frame, ax, length=chain.links[-1].length)
+            # Plot frames
+            camera_frame = np.dot(transformation_matrixes[-1], camera2gripper)
+            plot_frame(camera_frame, ax, length=chain.links[-1].length)
 
         for frame in other_frames:
             plot_frame(frame, ax, length=chain.links[-1].length)

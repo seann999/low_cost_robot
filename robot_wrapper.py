@@ -14,29 +14,13 @@ ikpy.inverse_kinematics.ORIENTATION_COEFF = 0.01
 import xml.etree.ElementTree as ET
 from scipy.spatial.transform import Rotation as R
 
-from umi.common.pose_util import pose_to_mat, mat_to_pose, mat_to_pose10d, rot6d_to_mat
+from phone import PhoneTracker
+
+from umi.common.pose_util import mat_to_pose10d, rot6d_to_mat
+import json
 
 
-camera2gripper = np.array([
-    [
-        0.9997668505539576,
-        -0.019970828271681517,
-        -0.008210392899446018, 0.00018299471587136708,
-    ],
-    [
-        -0.021388860005435672,
-        -0.8638202079680002,
-        -0.503345969462147, 0.06175676142391705,
-    ],
-    [
-        0.0029599326154731358,
-        0.5034042255725152,
-        -0.864045962015128, -0.00888269351076889,
-    ],
-    [
-        0, 0, 0, 1
-    ]
-])
+camera2gripper = json.load(open('calibration/camera_to_ee.json'))['T_cam2gripper']
 
 
 def modify_urdf_for_ikpy(urdf_file):
@@ -80,14 +64,20 @@ plotter = KinematicsPlotter()
 plotter.initialize_plot(plot_id="follower")
 
 
-def pose_to_matrix(pose):
+def pose7d_to_matrix(pose):
     """Convert a pose (position and orientation) to a 4x4 transformation matrix."""
     position = pose[:3]
-    orientation = R.from_quat(pose[3:]).as_matrix()
+    orientation = R.from_quat(pose[3:7]).as_matrix()
     matrix = np.eye(4)
     matrix[:3, :3] = orientation
     matrix[:3, 3] = position
     return matrix
+
+
+def matrix_to_pose7d(matrix):
+    position = matrix[:3, 3]
+    orientation = R.from_matrix(matrix[:3, :3]).as_quat()
+    return np.concatenate([position, orientation])
 
 
 def cam_move_to_ee(cam_mat, pos, rot6d):
@@ -102,7 +92,7 @@ def cam_move_to_ee(cam_mat, pos, rot6d):
     return cam_move_to, ee_move_to
 
 
-def joints_to_pose(joints, camera_frame=False):
+def joints_to_posemat(joints, camera_frame=False):
     raw_state = np.concatenate([[0], joints[:-1]])
     joints_float = (np.array(raw_state) - 2048) / 2048 * np.pi
     pose_matrix = robot_arm_chain.forward_kinematics(joints_float)
@@ -113,14 +103,22 @@ def joints_to_pose(joints, camera_frame=False):
     return pose_matrix
 
 
-def pose_to_joints(pose, gripper_joint, initial_position=None):
-    pose_matrix = pose_to_matrix(pose[:7])
+def raw_joints_to_plottable(joints):
+    position_angles = (np.array(joints) - 2048) / 2048 * np.pi
+    position_angles = np.concatenate([[0], position_angles[:-1]])
+    return position_angles
+
+
+def pose7d_to_joints(pose, gripper_joint, initial_position=None):
+    pose_matrix = pose7d_to_matrix(pose)
 
     if initial_position is not None:
         initial_position_angles = (np.array(initial_position) - 2048) / 2048 * np.pi
         initial_position_angles = np.concatenate([[0], initial_position_angles[:-1]])
+    else:
+        initial_position_angles = None
 
-        # plotter.update_plot(robot_arm_chain, initial_position_angles, plot_id="leader", target_matrix=joints_to_pose(initial_position))
+    # plotter.update_plot(robot_arm_chain, initial_position_angles, plot_id="leader", target_matrix=joints_to_pose(initial_position))
 
     joints = robot_arm_chain.inverse_kinematics(
         target_position=pose_matrix[:3, -1],
@@ -128,7 +126,7 @@ def pose_to_joints(pose, gripper_joint, initial_position=None):
         orientation_mode="all",
         initial_position=initial_position_angles)
 
-    # plotter.update_plot(robot_arm_chain, joints, plot_id="follower", target_matrix=pose_matrix)
+    plotter.update_plot(robot_arm_chain, joints, plot_id="follower", target_matrix=pose_matrix)
 
     joints = np.array(joints) / np.pi * 2048 + 2048
     joints[:-1] = joints[1:]
@@ -145,13 +143,15 @@ class Observation:
     cam_pose: Optional[np.ndarray]
     
 class RobotEnv:
-    def __init__(self, host: str = '192.168.0.231', port: int = 5000):
+    def __init__(self, host: str = '192.168.0.231', port: int = 5000, track_phone: bool = True):
         self.host = host
         self.port = port
         self.client_socket = None
         self.running = False
-        self.latest_observation = Observation(None, None, None, None)
+        self.latest_observation = None
         self._lock = threading.Lock()
+        self.tracker = PhoneTracker(port=5555, enable_visualization=False) if track_phone else None
+        self.track_phone = track_phone
         
     def _receive_sized_message(self, sock):
         """Helper method to receive a size-prefixed message."""
@@ -175,6 +175,15 @@ class RobotEnv:
         self.update_thread = threading.Thread(target=self._update_loop)
         self.update_thread.daemon = True
         self.update_thread.start()
+
+        while self.get_observation() is None:
+            time.sleep(0.1)
+
+        if self.track_phone:
+            print("Waiting for phone to initialize...")
+            while not self.tracker.received_first_message:
+                time.sleep(0.1)
+            print("Phone initialized")
         
     def _update_loop(self):
         while self.running:
@@ -192,8 +201,8 @@ class RobotEnv:
                 frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
                 
                 if frame is not None:
-                    ee_pose = joints_to_pose(follower_joints, camera_frame=False)
-                    cam_pose = joints_to_pose(follower_joints, camera_frame=True)
+                    ee_pose = joints_to_posemat(follower_joints, camera_frame=False)
+                    cam_pose = joints_to_posemat(follower_joints, camera_frame=True)
                     
                     # Update latest observation thread-safely
                     with self._lock:
@@ -225,6 +234,12 @@ class RobotEnv:
         with self._lock:
             return self.latest_observation
 
+    def move_to_pose(self, pose_matrix, duration=3.0):
+        current_joints = self.get_observation().joints
+        pose7d = matrix_to_pose7d(pose_matrix)
+        joints = pose7d_to_joints(pose7d, current_joints[-1], initial_position=current_joints)
+        self.move_to_joints(joints, duration)
+
     def move_to_joints(self, joints, duration=3.0):
         """Move robot from current joints to target joints over specified time.
         
@@ -239,12 +254,16 @@ class RobotEnv:
                 break
             print("Waiting for valid joint observation...")
             time.sleep(0.1)
+
+        if duration == 0:
+            self.send_joints(joints)
+            return
             
         start_joints = np.array(current_obs.joints)
         target_joints = np.array(joints)
         
         # Calculate number of steps for 10Hz
-        hz = 10
+        hz = 50
         steps = int(duration * hz)
         step_time = 1.0 / hz
         
@@ -280,6 +299,9 @@ class RobotEnv:
         """Send joint positions to the robot."""
         self._send_message({"position": position})
 
+    def send_base(self, base):
+        self._send_message({"base": base})
+
     def send_action(self, joints, base):
         self._send_message({
             "position": joints,
@@ -287,9 +309,10 @@ class RobotEnv:
         })
 
     def stop_base(self):
-        self._send_message({"base": [0, 0, 0]})
+        self.send_base([0, 0, 0])
             
     def close(self):
+        self.stop_base()
         self.running = False
         if self.client_socket:
             self.client_socket.close()
