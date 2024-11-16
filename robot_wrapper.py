@@ -136,6 +136,19 @@ def pose7d_to_joints(pose, gripper_joint, initial_position=None):
 
     return joints
 
+def level_pose(pose):
+    x_axis = pose[:3, 0]
+    x_axis[2] = 0
+    x_axis = x_axis / np.linalg.norm(x_axis)
+    z_axis = [0, 0, 1]
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis = y_axis / np.linalg.norm(y_axis)
+    pose[:3, 0] = x_axis
+    pose[:3, 1] = y_axis
+    pose[:3, 2] = z_axis
+
+    return pose
+
 @dataclass
 class Observation:
     image: Optional[np.ndarray]
@@ -154,7 +167,7 @@ class RobotEnv:
         self.tracker = PhoneTracker(port=5555, enable_visualization=False) if track_phone else None
         self.track_phone = track_phone
 
-        self.phone_marker_pose = json.load(open('calibration/marker_pose.json'))['T_marker2base']
+        self.T_phone2base = None
         
     def _receive_sized_message(self, sock):
         """Helper method to receive a size-prefixed message."""
@@ -187,7 +200,46 @@ class RobotEnv:
             while not self.tracker.received_first_message:
                 time.sleep(0.1)
             print("Phone initialized")
-        
+
+        self.T_phone2base = self.adjust_phone_marker_pose()
+
+    def adjust_phone_marker_pose(self):
+        phone_pose = self.tracker.full_pose.copy()
+
+        T_phone2marker = np.eye(4)
+        T_phone2marker[:3, :3] = np.array([
+            [0, 1, 0],
+            [1, 0, 0],
+            [0, 0, -1],
+        ])
+
+        phone_marker_pose = json.load(open('calibration/marker_pose.json'))['T_marker2base']
+        T_phone2base = T_phone2marker @ np.linalg.inv(phone_marker_pose)
+        world_base_pose = phone_pose @ T_phone2base
+
+        phone_pose_xy = phone_pose.copy()
+        phone_pose_xy[2, 3] = world_base_pose[2, 3]
+
+        distance_xy = np.linalg.norm(phone_pose_xy[:2, 3] - world_base_pose[:2, 3])
+        phone_z_vec = phone_pose[:3, 2].copy()
+        phone_z_vec[2] = 0
+        phone_z_vec = phone_z_vec / np.linalg.norm(phone_z_vec)
+
+        new_world_base_pose = np.eye(4)
+        new_world_base_pose[:3, 3] = phone_pose_xy[:3, 3] + distance_xy * phone_z_vec
+        new_world_base_pose[:3, 1] = phone_z_vec
+        new_world_base_pose[:3, 0] = np.cross(new_world_base_pose[:3, 1], new_world_base_pose[:3, 2])
+
+        # poses = dict(
+        #     phone=(phone_pose, 'red'),
+        #     base=(world_base_pose, 'blue'),
+        #     new_base=(new_world_base_pose, 'green'),
+        # )
+        # plotter.plot_poses(poses)
+        T_phone2base = np.linalg.inv(new_world_base_pose) @ phone_pose
+
+        return T_phone2base
+
     def _update_loop(self):
         while self.running:
             try:
@@ -250,6 +302,10 @@ class RobotEnv:
             joints: Target joint positions
             time: Duration of movement in seconds
         """
+        if duration == 0:
+            self.send_joints(joints)
+            return
+
         # Wait for valid observation
         while True:
             current_obs = self.get_observation()
@@ -257,10 +313,6 @@ class RobotEnv:
                 break
             print("Waiting for valid joint observation...")
             time.sleep(0.1)
-
-        if duration == 0:
-            self.send_joints(joints)
-            return
             
         start_joints = np.array(current_obs.joints)
         target_joints = np.array(joints)
@@ -280,8 +332,7 @@ class RobotEnv:
             
             # Send interpolated joints
             self.send_joints(interpolated_joints.tolist())
-            
-            # Sleep to maintain 10Hz
+
             time.sleep(step_time)
     
     def _send_message(self, data: dict):
@@ -324,38 +375,20 @@ class RobotEnv:
         obs = self.get_observation()
         live_phone_pose = self.tracker.full_pose.copy()
 
-        T_phone2marker = np.eye(4)
-        T_phone2marker[:3, :3] = np.array([
-            [0, 1, 0],
-            [1, 0, 0],
-            [0, 0, -1],
-        ])
-        
-        live_phone_pose = live_phone_pose @ T_phone2marker
-
-        world_base_pose = live_phone_pose @ np.linalg.inv(self.phone_marker_pose)
+        world_base_pose = live_phone_pose @ self.T_phone2base
+        # world_base_pose = level_pose(world_base_pose)
         world_ee_pose = world_base_pose @ obs.ee_pose
 
         return world_base_pose, world_ee_pose, live_phone_pose
 
     def move_arm_base_to(self, goal_arm_pose):
-        arm_base_pose, _, phone_pose = self.get_world_pose()
-        
-        arm_to_phone = np.linalg.inv(arm_base_pose) @ phone_pose
-        goal_phone_pose = goal_arm_pose @ arm_to_phone
-
-        real_phone_pose = self.tracker.full_pose
-        # Calculate the transformation from phone_pose to real_phone_pose
-        phone_to_real = np.linalg.inv(phone_pose) @ real_phone_pose
-        # Apply the same transformation to goal_phone_pose
-        real_goal_phone_pose = goal_phone_pose @ phone_to_real
-
-        goal_xyt = self.tracker.calculate_xyt(real_goal_phone_pose)
+        goal_phone_pose = goal_arm_pose @ np.linalg.inv(self.T_phone2base)
+        goal_xyt = self.tracker.calculate_xyt(goal_phone_pose)
 
         done = False
         while not done:
             done = self.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
-            time.sleep(0.1)
+            time.sleep(1/50)
 
     def move_base_to(self, goal_x, goal_y, goal_yaw):
         current_pose = self.tracker.get_latest_position()
@@ -388,16 +421,18 @@ class RobotEnv:
         yaw_diff = math.atan2(math.sin(yaw_diff), math.cos(yaw_diff))  # Normalize to [-pi, pi]
         
         # Convert to rotation command (-0.3 to 0.3)
-        rotation_speed = np.clip(yaw_diff * 0.1, -0.3, 0.3)
+        min_rotation = 0.2
+        max_rotation = 0.2
+        rotation_speed = np.clip(yaw_diff * 0.1, -max_rotation, max_rotation)
         
         # Calculate speed based on distance
         if distance < 0.01:  # Very close to goal
             speed = 0
             # When stopped, focus on final orientation
             if abs(yaw_diff) > np.deg2rad(3):
-                rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
-                if abs(rotation_speed) < 0.2:
-                    rotation_speed = 0.2 * np.sign(rotation_speed)
+                rotation_speed = np.clip(yaw_diff * 0.3, -max_rotation, max_rotation)
+                if abs(rotation_speed) < min_rotation:
+                    rotation_speed = min_rotation * np.sign(rotation_speed)
             else:
                 rotation_speed = 0
                 self.send_base([speed, direction, -rotation_speed])
@@ -405,7 +440,8 @@ class RobotEnv:
         else:
             # speed = 90
             # speed = min(90, max(40, distance * 500))
-            speed = min(90, max(25, distance * 200))
+            # speed = min(90, max(25, distance * 200))
+            speed = 25
 
         print(distance, yaw_diff)
         # print(speed, direction, -rotation_speed)
@@ -423,3 +459,43 @@ class RobotEnv:
         posemat[1, 3] = 0.15
         posemat[2, 3] = 0.1
         self.move_to_pose(posemat, duration=2)
+
+    def generate_goal_arm_pose(self, ee_pose, z_level, y_offset=0.15):
+        # Get the z-axis vector from ee_pose
+        if ee_pose[2, 1] > 0:
+            new_y_axis = -ee_pose[:3, 2]
+        else:
+            new_y_axis = ee_pose[:3, 2]
+        # Project onto XY plane by zeroing out the z component
+        new_y_axis[2] = 0
+        # Normalize to make it a unit vector
+        new_y_axis = new_y_axis / np.linalg.norm(new_y_axis)
+        z_axis = [0, 0, 1]
+        x_axis = np.cross(new_y_axis, z_axis)
+        x_axis = x_axis / np.linalg.norm(x_axis)
+
+        arm_pose = np.eye(4)
+        arm_pose[:3, 0] = x_axis
+        arm_pose[:3, 1] = new_y_axis
+        arm_pose[:3, 2] = z_axis
+        arm_pose[:3, 3] = ee_pose[:3, 3] - y_offset * new_y_axis
+        arm_pose[2, 3] = z_level
+
+        return arm_pose
+
+    def move_ee_to(self, goal_ee_pose):
+        arm_base_pose, _, _ = self.get_world_pose()
+        goal_arm_base_pose = self.generate_goal_arm_pose(goal_ee_pose, arm_base_pose[2, 3])
+        # print(arm_base_pose, goal_arm_base_pose)
+        goal_ee_wrt_arm = np.linalg.inv(goal_arm_base_pose) @ goal_ee_pose
+        self.move_to_pose(goal_ee_wrt_arm, duration=0)
+        self.move_arm_base_to(goal_arm_base_pose)
+
+        # refinement
+        arm_base_pose, current_ee_pose, _ = self.get_world_pose()
+        print('goal ee', goal_ee_pose)
+        print('current ee', current_ee_pose)
+        goal_ee_wrt_arm = np.linalg.inv(arm_base_pose) @ goal_ee_pose
+        self.move_to_pose(goal_ee_wrt_arm, duration=0)
+
+        return goal_arm_base_pose
