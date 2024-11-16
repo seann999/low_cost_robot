@@ -14,25 +14,20 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
 
-def plot_poses(ee_pose, goal_ee_pose, arm_pose, goal_arm_pose, phone_pose, goal_phone_pose, real_phone_pose, real_goal_phone_pose):
-    """Plot the current and goal poses for ee, arm, and phone in 3D."""
+def plot_poses(poses_dict: Dict[str, tuple]):
+    """
+    Plot arbitrary number of poses in 3D.
+    
+    Args:
+        poses_dict: Dictionary where
+            - key: name of the pose (str)
+            - value: tuple of (pose_matrix, color)
+    """
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
     
-    # Plot poses as points with arrows for orientation
-    poses = {
-        'EE Current': (ee_pose, 'red'),
-        'EE Goal': (goal_ee_pose, 'lightcoral'),
-        'Arm Current': (arm_pose, 'blue'),
-        'Arm Goal': (goal_arm_pose, 'lightblue'),
-        'Phone Current': (phone_pose, 'green'),
-        'Phone Goal': (goal_phone_pose, 'lightgreen'),
-        'Real Phone': (real_phone_pose, 'darkorange'),
-        'Real Phone Goal': (real_goal_phone_pose, 'bisque')
-    }
-    
     # Calculate plot limits
-    all_positions = np.vstack([pose[:3, 3] for pose, _ in poses.values()])
+    all_positions = np.vstack([pose[:3, 3] for pose, _ in poses_dict.values()])
     min_pos = np.min(all_positions, axis=0)
     max_pos = np.max(all_positions, axis=0)
     center = (min_pos + max_pos) / 2
@@ -41,7 +36,7 @@ def plot_poses(ee_pose, goal_ee_pose, arm_pose, goal_arm_pose, phone_pose, goal_
     # RGB colors for xyz axes
     axis_colors = ['red', 'green', 'blue']
     
-    for name, (pose, dot_color) in poses.items():
+    for name, (pose, dot_color) in poses_dict.items():
         # Plot position
         pos = pose[:3, 3]
         ax.scatter(pos[0], pos[1], pos[2], c=dot_color, marker='o', label=name)
@@ -86,10 +81,10 @@ def main():
         # print(arm_pose)
         # print(ee_pose)
         goal_ee_pose = ee_pose.copy()
-        # Create rotation matrix for 45 degrees around z-axis
-        rot_z = R.from_euler('y', 45, degrees=True).as_matrix()
-        # Apply rotation to the orientation part of the pose matrix
-        goal_ee_pose[:3, :3] = goal_ee_pose[:3, :3] @ rot_z
+        # Create rotation matrix for 45 degrees around world Z-axis
+        rot_z = R.from_euler('z', 45, degrees=True).as_matrix()
+        # Apply rotation by pre-multiplying (world frame rotation)
+        goal_ee_pose[:3, :3] = rot_z @ goal_ee_pose[:3, :3]
 
         # Calculate the fixed transform from arm to ee
         arm_to_ee_pose = np.linalg.inv(arm_pose) @ ee_pose
@@ -115,7 +110,18 @@ def main():
         print('base_pose', base_pose, '->', goal_xyt)
         
         # Add this line to visualize the poses
-        plot_poses(ee_pose, goal_ee_pose, arm_pose, goal_arm_pose, phone_pose, goal_phone_pose, real_phone_pose, real_goal_phone_pose)
+        poses_to_plot = {
+            'Origin': (np.eye(4), 'black'),
+            'EE Current': (ee_pose, 'red'),
+            'EE Goal': (goal_ee_pose, 'lightcoral'),
+            'Arm Current': (arm_pose, 'blue'),
+            'Arm Goal': (goal_arm_pose, 'lightblue'),
+            'Phone Current': (phone_pose, 'green'),
+            'Phone Goal': (goal_phone_pose, 'lightgreen'),
+            'Real Phone': (real_phone_pose, 'darkorange'),
+            'Real Phone Goal': (real_goal_phone_pose, 'bisque')
+        }
+        plot_poses(poses_to_plot)
         
         done = False
         while not done:
