@@ -77,30 +77,50 @@ class PhoneTracker:
     def on_disconnect(self, sid):
         print("Client disconnected", sid)
 
-    def handle_message(self, sid, data):
-        self.received_first_message = True
-        structured_data = decode_data(data)
+    def calculate_xyt(self, pose_matrix):
+        """
+        Calculate position and orientation from transform matrix.
         
+        Args:
+            pose_matrix (np.ndarray): 4x4 transformation matrix
+            
+        Returns:
+            dict: Contains x, y, and yaw values
+        """
         # Extract position and rotation
-        position = structured_data.transform_matrix[:3, 3]
-        rotation_matrix = structured_data.transform_matrix[:3, :3]
-
-        self.full_pose = structured_data.transform_matrix
+        position = pose_matrix[:3, 3]
+        rotation_matrix = pose_matrix[:3, :3]
         
         # Calculate vectors
-        up_vector = np.array([0, 1, 0])
+        up_vector = np.array([0, 0, 1])
         right_vector = rotation_matrix[:3, 0]
         forward_vector = np.cross(right_vector, up_vector)
         
-        # Update latest position
-        self.latest_position['x'] = float(position[2])  # z -> x
-        self.latest_position['y'] = float(position[0])  # x -> y
-        self.latest_position['yaw'] = float(np.arctan2(forward_vector[0], forward_vector[2]))
+        return {
+            'x': float(position[0]),
+            'y': float(position[1]),
+            'yaw': float(np.arctan2(forward_vector[1], forward_vector[0]))
+        }
+
+    def handle_message(self, sid, data):
+        self.received_first_message = True
+        structured_data = decode_data(data)
+        # Rotation matrix to convert from +y up to +z up coordinate system
+        R_convert = np.array([
+            [1, 0, 0, 0],
+            [0, 0, -1, 0],
+            [0, 1, 0, 0],
+            [0, 0, 0, 1]
+        ])
+        self.full_pose = R_convert @ structured_data.transform_matrix
+        
+        # Update latest position using the new function
+        self.latest_position = self.calculate_xyt(self.full_pose)
         
         if self.enable_visualization:
             if not self.initialized:
                 self._init_visualization()
-            self._update_visualization(structured_data.transform_matrix)
+            self._update_visualization(self.latest_position)
         
         self.prev_time = structured_data.timestamp
         self.package_cnt += 1
@@ -122,23 +142,13 @@ class PhoneTracker:
             cv2.namedWindow(self.window_name)
             self.initialized = True
 
-    def _update_visualization(self, transform_matrix):
+    def _update_visualization(self, position):
         # Create a blank image
         image = np.zeros((self.image_size[0], self.image_size[1], 3), dtype=np.uint8)
         
-        # Extract position and rotation
-        position = transform_matrix[:3, 3]
-        rotation_matrix = transform_matrix[:3, :3]
-        up_vector = np.array([0, 1, 0])
-        right_vector = rotation_matrix[:3, 0]
-        forward_vector = np.cross(right_vector, up_vector)
-        x_pos = position[2]  # z -> x
-        y_pos = position[0]  # x -> y
-        angle = np.arctan2(forward_vector[0], forward_vector[2])
-        
         # Update history
-        self.position_history.append([x_pos, y_pos])
-        self.angle_history.append(angle)
+        self.position_history.append([position['x'], position['y']])
+        self.angle_history.append(position['yaw'])
         if len(self.position_history) > self.history_length:
             self.position_history.pop(0)
             self.angle_history.pop(0)
@@ -160,7 +170,7 @@ class PhoneTracker:
         if len(pos_array) > 0:
             scale = 100
             pos_x = int(center_x + pos_array[-1, 0] * scale)
-            pos_z = int(center_y - pos_array[-1, 1] * scale)
+            pos_y = int(center_y - pos_array[-1, 1] * scale)
             
             # Draw position trail
             for i in range(len(pos_array) - 1):
@@ -174,8 +184,8 @@ class PhoneTracker:
             angle_rad = ang_array[-1]
             arrow_length = 30
             end_x = pos_x + int(arrow_length * np.cos(angle_rad))
-            end_y = pos_z - int(arrow_length * np.sin(angle_rad))
-            cv2.arrowedLine(image, (pos_x, pos_z), (end_x, end_y), (0, 0, 255), 2)
+            end_y = pos_y - int(arrow_length * np.sin(angle_rad))
+            cv2.arrowedLine(image, (pos_x, pos_y), (end_x, end_y), (0, 0, 255), 2)
         
         # Draw plots
         self._draw_plot(image, pos_array[:, 0], top_view_size + 50, 'X Position')
