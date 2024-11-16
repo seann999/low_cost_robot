@@ -6,6 +6,7 @@ import threading
 from typing import Tuple, Optional
 from dataclasses import dataclass
 import time
+import math
 
 import ikpy
 from ikpy.chain import Chain
@@ -152,6 +153,8 @@ class RobotEnv:
         self._lock = threading.Lock()
         self.tracker = PhoneTracker(port=5555, enable_visualization=False) if track_phone else None
         self.track_phone = track_phone
+
+        self.phone_marker_pose = json.load(open('calibration/marker_pose.json'))['T_marker2base']
         
     def _receive_sized_message(self, sock):
         """Helper method to receive a size-prefixed message."""
@@ -316,3 +319,83 @@ class RobotEnv:
         self.running = False
         if self.client_socket:
             self.client_socket.close()
+
+    def get_world_pose(self):
+        obs = self.get_observation()
+        live_phone_pose = self.tracker.full_pose.copy()
+
+        T_phone2marker = np.eye(4)
+        T_phone2marker[:3, :3] = np.array([
+            [0, 1, 0],
+            [1, 0, 0],
+            [0, 0, -1],
+        ])
+        
+        live_phone_pose = live_phone_pose @ T_phone2marker
+        live_phone_pose[:3, 3] += live_phone_pose[:3, 1] * 0.06
+        live_phone_pose[:3, 3] -= live_phone_pose[:3, 0] * 0.02
+
+        world_base_pose = live_phone_pose @ np.linalg.inv(self.phone_marker_pose)
+        world_ee_pose = world_base_pose @ obs.ee_pose
+
+        return world_base_pose, world_ee_pose, live_phone_pose
+
+    def move_base_to(self, goal_x, goal_y, goal_yaw):
+        current_pose = self.tracker.get_latest_position()
+
+        curr_x = current_pose['x']
+        curr_y = current_pose['y']
+        curr_yaw = current_pose['yaw']
+
+        # Calculate distance to goal
+        dx = goal_x - curr_x
+        dy = goal_y - curr_y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        # Calculate angle to goal in world space (in radians)
+        goal_angle = math.atan2(dy, dx)
+        
+        # Convert to robot-relative angle
+        # Subtract current yaw (already in radians) and convert to degrees
+        relative_angle = math.degrees(goal_angle - curr_yaw)
+        
+        # Normalize angle to [-180, 180]
+        relative_angle = ((relative_angle + 180) % 360) - 180
+        
+        # Convert to robot's direction system (0 is left, 90 is forward)
+        direction = relative_angle + 90
+        
+        # Calculate rotation command (yaw control)
+        # Calculate the shortest angle difference between current and goal yaw
+        yaw_diff = goal_yaw - curr_yaw
+        yaw_diff = math.atan2(math.sin(yaw_diff), math.cos(yaw_diff))  # Normalize to [-pi, pi]
+        
+        # Convert to rotation command (-0.3 to 0.3)
+        rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
+        
+        # Calculate speed based on distance
+        if distance < 0.01:  # Very close to goal
+            speed = 0
+            # When stopped, focus on final orientation
+            if abs(yaw_diff) > np.deg2rad(3):
+                rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
+                if abs(rotation_speed) < 0.2:
+                    rotation_speed = 0.2 * np.sign(rotation_speed)
+            else:
+                rotation_speed = 0
+                self.send_base([speed, direction, -rotation_speed])
+                return True
+        else:
+            # speed = 90
+            speed = min(90, max(40, distance * 500))
+        
+        self.send_base([speed, direction, -rotation_speed])
+        return False
+
+    def home_joints(self):
+        posemat = np.eye(4)
+        posemat[:3, :3] = R.from_euler('xyz', [90, 0, 0], degrees=True).as_matrix()
+        posemat[0, 3] = 0
+        posemat[1, 3] = 0.15
+        posemat[2, 3] = 0.1
+        self.move_to_pose(posemat, duration=2)
