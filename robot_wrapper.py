@@ -332,13 +332,30 @@ class RobotEnv:
         ])
         
         live_phone_pose = live_phone_pose @ T_phone2marker
-        live_phone_pose[:3, 3] += live_phone_pose[:3, 1] * 0.06
-        live_phone_pose[:3, 3] -= live_phone_pose[:3, 0] * 0.02
 
         world_base_pose = live_phone_pose @ np.linalg.inv(self.phone_marker_pose)
         world_ee_pose = world_base_pose @ obs.ee_pose
 
         return world_base_pose, world_ee_pose, live_phone_pose
+
+    def move_arm_base_to(self, goal_arm_pose):
+        arm_base_pose, _, phone_pose = self.get_world_pose()
+        
+        arm_to_phone = np.linalg.inv(arm_base_pose) @ phone_pose
+        goal_phone_pose = goal_arm_pose @ arm_to_phone
+
+        real_phone_pose = self.tracker.full_pose
+        # Calculate the transformation from phone_pose to real_phone_pose
+        phone_to_real = np.linalg.inv(phone_pose) @ real_phone_pose
+        # Apply the same transformation to goal_phone_pose
+        real_goal_phone_pose = goal_phone_pose @ phone_to_real
+
+        goal_xyt = self.tracker.calculate_xyt(real_goal_phone_pose)
+
+        done = False
+        while not done:
+            done = self.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
+            time.sleep(0.1)
 
     def move_base_to(self, goal_x, goal_y, goal_yaw):
         current_pose = self.tracker.get_latest_position()
@@ -371,7 +388,7 @@ class RobotEnv:
         yaw_diff = math.atan2(math.sin(yaw_diff), math.cos(yaw_diff))  # Normalize to [-pi, pi]
         
         # Convert to rotation command (-0.3 to 0.3)
-        rotation_speed = np.clip(yaw_diff * 0.3, -0.3, 0.3)
+        rotation_speed = np.clip(yaw_diff * 0.1, -0.3, 0.3)
         
         # Calculate speed based on distance
         if distance < 0.01:  # Very close to goal
@@ -387,12 +404,19 @@ class RobotEnv:
                 return True
         else:
             # speed = 90
-            speed = min(90, max(40, distance * 500))
+            # speed = min(90, max(40, distance * 500))
+            speed = min(90, max(25, distance * 200))
+
+        print(distance, yaw_diff)
+        # print(speed, direction, -rotation_speed)
         
         self.send_base([speed, direction, -rotation_speed])
         return False
 
     def home_joints(self):
+        init_config = [2088, 2071, 1773, 3058, 2078, 2890]
+        self.move_to_joints(init_config, duration=3.0)
+
         posemat = np.eye(4)
         posemat[:3, :3] = R.from_euler('xyz', [90, 0, 0], degrees=True).as_matrix()
         posemat[0, 3] = 0
