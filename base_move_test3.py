@@ -1,6 +1,6 @@
 import time
 from robot import Robot
-from robot_wrapper import RobotEnv, joints_to_pose, pose_to_joints
+from robot_wrapper import RobotEnv
 from simple_pid import PID
 import numpy as np
 import math
@@ -12,6 +12,7 @@ def main():
     try:
         env = RobotEnv()
         env.connect()
+        env.home_joints()
 
         # Set up the plot
         plt.ion()  # Enable interactive mode
@@ -104,7 +105,7 @@ def main():
                     rotation_speed = 0
             else:
                 # speed = 90
-                speed = min(90, max(20, distance * 500))
+                speed = min(90, max(40, distance * 500))
 
             # Add the text updates right here, after calculating distance and yaw_diff but before sending commands
             distance_text.set_text(f'Distance to goal: {distance:.3f} m')
