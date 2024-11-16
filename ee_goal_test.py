@@ -74,60 +74,56 @@ def main():
         env.connect()
         env.home_joints()
 
-        # obs = env.get_observation()
-        # print(obs.ee_pose)
-
         arm_pose, ee_pose, phone_pose = env.get_world_pose()
-        # print(arm_pose)
-        # print(ee_pose)
         goal_ee_pose = ee_pose.copy()
-        # Create rotation matrix for 45 degrees around world Z-axis
-        rot_z = R.from_euler('z', 45, degrees=True).as_matrix()
-        # Apply rotation by pre-multiplying (world frame rotation)
-        goal_ee_pose[:3, :3] = rot_z @ goal_ee_pose[:3, :3]
 
-        # Calculate the fixed transform from arm to ee
-        arm_to_ee_pose = np.linalg.inv(arm_pose) @ ee_pose
-        # Calculate new arm pose that would put ee at goal
-        goal_arm_pose = goal_ee_pose @ np.linalg.inv(arm_to_ee_pose)
+        for _ in range(10):
+            rot_z = R.from_euler('z', 10, degrees=True).as_matrix()
+            goal_ee_pose[:3, :3] = rot_z @ goal_ee_pose[:3, :3]
 
-        arm_to_phone = np.linalg.inv(arm_pose) @ phone_pose
-        goal_phone_pose = goal_arm_pose @ arm_to_phone
+            # Calculate the fixed transform from arm to ee
+            arm_to_ee_pose = np.linalg.inv(arm_pose) @ ee_pose
+            # Calculate new arm pose that would put ee at goal
+            goal_arm_pose = goal_ee_pose @ np.linalg.inv(arm_to_ee_pose)
 
-        real_phone_pose = env.tracker.full_pose
-        # Calculate the transformation from phone_pose to real_phone_pose
-        phone_to_real = np.linalg.inv(phone_pose) @ real_phone_pose
-        # Apply the same transformation to goal_phone_pose
-        real_goal_phone_pose = goal_phone_pose @ phone_to_real
+            arm_to_phone = np.linalg.inv(arm_pose) @ phone_pose
+            goal_phone_pose = goal_arm_pose @ arm_to_phone
 
-        goal_xyt = env.tracker.calculate_xyt(real_goal_phone_pose)
+            real_phone_pose = env.tracker.full_pose
+            # Calculate the transformation from phone_pose to real_phone_pose
+            phone_to_real = np.linalg.inv(phone_pose) @ real_phone_pose
+            # Apply the same transformation to goal_phone_pose
+            real_goal_phone_pose = goal_phone_pose @ phone_to_real
 
-        base_pose = env.tracker.get_latest_position()
+            goal_xyt = env.tracker.calculate_xyt(real_goal_phone_pose)
 
-        print('ee_pose', ee_pose, '->', goal_ee_pose)
-        print('arm_pose', arm_pose, '->', goal_arm_pose)
-        print('phone_pose', phone_pose, '->', goal_phone_pose)
-        print('base_pose', base_pose, '->', goal_xyt)
-        
-        # Add this line to visualize the poses
-        poses_to_plot = {
-            'Origin': (np.eye(4), 'black'),
-            'EE Current': (ee_pose, 'red'),
-            'EE Goal': (goal_ee_pose, 'lightcoral'),
-            'Arm Current': (arm_pose, 'blue'),
-            'Arm Goal': (goal_arm_pose, 'lightblue'),
-            'Phone Current': (phone_pose, 'green'),
-            'Phone Goal': (goal_phone_pose, 'lightgreen'),
-            'Real Phone': (real_phone_pose, 'darkorange'),
-            'Real Phone Goal': (real_goal_phone_pose, 'bisque')
-        }
-        plot_poses(poses_to_plot)
-        
-        done = False
-        while not done:
-            done = env.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
-            print(done)
-            time.sleep(0.1)
+            base_pose = env.tracker.get_latest_position()
+
+            print('ee_pose', ee_pose, '->', goal_ee_pose)
+            print('arm_pose', arm_pose, '->', goal_arm_pose)
+            print('phone_pose', phone_pose, '->', goal_phone_pose)
+            print('base_pose', base_pose, '->', goal_xyt)
+            
+            # Add this line to visualize the poses
+            poses_to_plot = {
+                'Origin': (np.eye(4), 'black'),
+                'EE Current': (ee_pose, 'red'),
+                'EE Goal': (goal_ee_pose, 'lightcoral'),
+                'Arm Current': (arm_pose, 'blue'),
+                'Arm Goal': (goal_arm_pose, 'lightblue'),
+                'Phone Current': (phone_pose, 'green'),
+                'Phone Goal': (goal_phone_pose, 'lightgreen'),
+                'Real Phone': (real_phone_pose, 'darkorange'),
+                'Real Phone Goal': (real_goal_phone_pose, 'bisque')
+            }
+            # plot_poses(poses_to_plot)
+            
+            done = False
+            while not done:
+                done = env.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
+                print(done)
+                time.sleep(0.1)
+            time.sleep(1)
 
     except KeyboardInterrupt:
         print("\nExiting gracefully...")
