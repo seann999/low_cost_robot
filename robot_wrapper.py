@@ -127,7 +127,7 @@ def pose7d_to_joints(pose, gripper_joint, initial_position=None):
         orientation_mode="all",
         initial_position=initial_position_angles)
 
-    plotter.update_plot(robot_arm_chain, joints, plot_id="follower", target_matrix=pose_matrix)
+    # .update_plot(robot_arm_chain, joints, plot_id="follower", target_matrix=pose_matrix)
 
     joints = np.array(joints) / np.pi * 2048 + 2048
     joints[:-1] = joints[1:]
@@ -381,13 +381,17 @@ class RobotEnv:
 
         return world_base_pose, world_ee_pose, live_phone_pose
 
-    def move_arm_base_to(self, goal_arm_pose):
+    def move_arm_base_to(self, goal_arm_pose, wait_base=True):
         goal_phone_pose = goal_arm_pose @ np.linalg.inv(self.T_phone2base)
         goal_xyt = self.tracker.calculate_xyt(goal_phone_pose)
 
         done = False
         while not done:
             done = self.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
+
+            if not wait_base:
+                break
+
             time.sleep(1/50)
 
     def move_base_to(self, goal_x, goal_y, goal_yaw):
@@ -483,19 +487,20 @@ class RobotEnv:
 
         return arm_pose
 
-    def move_ee_to(self, goal_ee_pose):
+    def move_ee_to(self, goal_ee_pose, wait_base=True):
         arm_base_pose, _, _ = self.get_world_pose()
         goal_arm_base_pose = self.generate_goal_arm_pose(goal_ee_pose, arm_base_pose[2, 3])
         # print(arm_base_pose, goal_arm_base_pose)
         goal_ee_wrt_arm = np.linalg.inv(goal_arm_base_pose) @ goal_ee_pose
         self.move_to_pose(goal_ee_wrt_arm, duration=0)
-        self.move_arm_base_to(goal_arm_base_pose)
+        self.move_arm_base_to(goal_arm_base_pose, wait_base=wait_base)
 
-        # refinement
-        arm_base_pose, current_ee_pose, _ = self.get_world_pose()
-        print('goal ee', goal_ee_pose)
-        print('current ee', current_ee_pose)
-        goal_ee_wrt_arm = np.linalg.inv(arm_base_pose) @ goal_ee_pose
-        self.move_to_pose(goal_ee_wrt_arm, duration=0)
+        if wait_base:
+            # refinement
+            arm_base_pose, current_ee_pose, _ = self.get_world_pose()
+            # print('goal ee', goal_ee_pose)
+            # print('current ee', current_ee_pose)
+            goal_ee_wrt_arm = np.linalg.inv(arm_base_pose) @ goal_ee_pose
+            self.move_to_pose(goal_ee_wrt_arm, duration=0)
 
         return goal_arm_base_pose

@@ -33,7 +33,7 @@ def main():
         def move_ee_test(goal_ee_pose):
             nonlocal index  # Access the index variable from the outer scope
             index += 1  # Increment the index
-            goal_arm_base_pose = env.move_ee_to(goal_ee_pose)
+            goal_arm_base_pose = env.move_ee_to(goal_ee_pose, wait_base=True)
 
             poses[f'desired_arm_{index}'] = (goal_arm_base_pose.copy(), 'lightcoral')
             poses[f'desired_ee_{index}'] = (goal_ee_pose.copy(), 'lightcoral')
@@ -85,10 +85,13 @@ def main():
             ee_pose = origin.copy()
             # ee_pose[:3, 3] += arm_pose[:3, 0] * np.sin(i * 0.1) * 0.1
             ee_pose[:3, 3] += ee_pose[:3, 1] * np.sin(i * 0.1) * 0.1
+            ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.1
             print(ee_pose[:3, 3])
             move_ee_test(ee_pose)
+            # time.sleep(0.2)
 
-        plotter.plot_poses(poses)
+        # plotter.plot_poses({k: v for k, v in poses.items() if k.startswith('desired_ee')})
+        plotter.plot_poses({k: v for k, v in poses.items() if k.startswith('actual_ee')})
 
     except KeyboardInterrupt:
         print("\nExiting gracefully...")
