@@ -30,10 +30,10 @@ def main():
         poses = dict()
         index = 0
 
-        def move_ee_test(goal_ee_pose):
+        def move_ee_test(goal_ee_pose, wait_base):
             nonlocal index  # Access the index variable from the outer scope
             index += 1  # Increment the index
-            goal_arm_base_pose = env.move_ee_to(goal_ee_pose, wait_base=True)
+            goal_arm_base_pose = env.move_ee_to(goal_ee_pose, wait_base=wait_base)
 
             poses[f'desired_arm_{index}'] = (goal_arm_base_pose.copy(), 'lightcoral')
             poses[f'desired_ee_{index}'] = (goal_ee_pose.copy(), 'lightcoral')
@@ -84,14 +84,19 @@ def main():
             # ee_pose[2, 3] = np.sin(i * 0.1) * 0.03 + 0.05
             ee_pose = origin.copy()
             # ee_pose[:3, 3] += arm_pose[:3, 0] * np.sin(i * 0.1) * 0.1
-            ee_pose[:3, 3] += ee_pose[:3, 1] * np.sin(i * 0.1) * 0.1
-            ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.1
-            print(ee_pose[:3, 3])
-            move_ee_test(ee_pose)
-            # time.sleep(0.2)
+            # ee_pose[:3, 3] += ee_pose[:3, 2] * np.sin(i * 0.1) * 0.05
+            # ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.05
+            rot_z = R.from_euler('z', i, degrees=True).as_matrix()
+            ee_pose[:3, :3] = rot_z @ ee_pose[:3, :3]
+
+            for _ in range(5):
+                move_ee_test(ee_pose, False)
+                time.sleep(0.02)
+
+        env.stop_base()
 
         # plotter.plot_poses({k: v for k, v in poses.items() if k.startswith('desired_ee')})
-        plotter.plot_poses({k: v for k, v in poses.items() if k.startswith('actual_ee')})
+        plotter.plot_poses({k: v for k, v in poses.items() if k.startswith('actual_ee')}, dots_only=True)
 
     except KeyboardInterrupt:
         print("\nExiting gracefully...")
