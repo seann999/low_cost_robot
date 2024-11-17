@@ -7,6 +7,7 @@ from typing import Tuple, Optional
 from dataclasses import dataclass
 import time
 import math
+import os
 
 import ikpy
 from ikpy.chain import Chain
@@ -21,6 +22,7 @@ from umi.common.pose_util import mat_to_pose10d, rot6d_to_mat
 import json
 
 
+BATTERY = int(os.getenv('BATTERY', 1))
 camera2gripper = json.load(open('calibration/camera_to_ee.json'))['T_cam2gripper']
 
 
@@ -426,7 +428,7 @@ class RobotEnv:
         
         # Convert to rotation command (-0.3 to 0.3)
         min_rotation = 0.2
-        max_rotation = 0.2
+        max_rotation = 0.3
         rotation_speed = np.clip(yaw_diff * 0.1, -max_rotation, max_rotation)
         
         # Calculate speed based on distance
@@ -442,10 +444,10 @@ class RobotEnv:
                 self.send_base([speed, direction, -rotation_speed])
                 return True
         else:
-            # speed = 90
-            # speed = min(90, max(40, distance * 500))
-            # speed = min(90, max(25, distance * 200))
-            speed = 25
+            # speed = 90  # max speed
+            # speed = min(90, max(40, distance * 400))
+            # speed = min(90, max(25, distance * 250))
+            speed = 25 if BATTERY else 40
 
         print(distance, yaw_diff)
         # print(speed, direction, -rotation_speed)
