@@ -84,8 +84,6 @@ def matrix_to_pose7d(matrix):
 
 
 def cam_move_to_ee(cam_mat, pos, rot6d):
-    # cam_mat = ee_mat @ camera2gripper
-
     trans = np.eye(4)
     trans[:3, 3] = pos
     trans[:3, :3] = rot6d_to_mat(rot6d)
@@ -157,6 +155,8 @@ class Observation:
     joints: Optional[np.ndarray]
     ee_pose: Optional[np.ndarray]
     cam_pose: Optional[np.ndarray]
+    arm_base_pose: Optional[np.ndarray]
+    phone_pose: Optional[np.ndarray]
     
 class RobotEnv:
     def __init__(self, host: str = '192.168.0.231', port: int = 5000, track_phone: bool = True):
@@ -187,6 +187,14 @@ class RobotEnv:
         return data
         
     def connect(self):
+        if self.track_phone:
+            print("Waiting for phone to initialize...")
+            while not self.tracker.received_first_message:
+                time.sleep(0.1)
+            print("Phone initialized")
+
+        self.T_phone2base = self.adjust_phone_marker_pose()
+
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client_socket.connect((self.host, self.port))
         self.running = True
@@ -196,14 +204,6 @@ class RobotEnv:
 
         while self.get_observation() is None:
             time.sleep(0.1)
-
-        if self.track_phone:
-            print("Waiting for phone to initialize...")
-            while not self.tracker.received_first_message:
-                time.sleep(0.1)
-            print("Phone initialized")
-
-        self.T_phone2base = self.adjust_phone_marker_pose()
 
     def adjust_phone_marker_pose(self):
         phone_pose = self.tracker.full_pose.copy()
@@ -258,12 +258,22 @@ class RobotEnv:
                 frame = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
                 
                 if frame is not None:
-                    ee_pose = joints_to_posemat(follower_joints, camera_frame=False)
-                    cam_pose = joints_to_posemat(follower_joints, camera_frame=True)
+                    local_ee_pose = joints_to_posemat(follower_joints, camera_frame=False)
+                    phone_pose = self.tracker.full_pose.copy()
+                    world_base_pose = phone_pose @ self.T_phone2base
+                    world_ee_pose = world_base_pose @ local_ee_pose
+                    world_cam_pose = world_ee_pose @ camera2gripper
                     
                     # Update latest observation thread-safely
                     with self._lock:
-                        self.latest_observation = Observation(frame, follower_joints, ee_pose, cam_pose)
+                        self.latest_observation = Observation(
+                            frame,
+                            follower_joints,
+                            world_ee_pose,
+                            world_cam_pose,
+                            world_base_pose,
+                            phone_pose,
+                        )
                         
             except (ConnectionError, json.JSONDecodeError) as e:
                 print(f"Connection error in update loop: {e}")
@@ -291,10 +301,11 @@ class RobotEnv:
         with self._lock:
             return self.latest_observation
 
-    def move_to_pose(self, pose_matrix, duration=3.0):
+    def move_to_pose(self, pose_matrix, gripper_rad=0, duration=3.0):
         current_joints = self.get_observation().joints
         pose7d = matrix_to_pose7d(pose_matrix)
-        joints = pose7d_to_joints(pose7d, current_joints[-1], initial_position=current_joints)
+        gripper_joint = int(gripper_rad / np.pi * 2048 + 2048)
+        joints = pose7d_to_joints(pose7d, gripper_joint, initial_position=current_joints)
         self.move_to_joints(joints, duration)
 
     def move_to_joints(self, joints, duration=3.0):
@@ -375,13 +386,8 @@ class RobotEnv:
 
     def get_world_pose(self):
         obs = self.get_observation()
-        live_phone_pose = self.tracker.full_pose.copy()
 
-        world_base_pose = live_phone_pose @ self.T_phone2base
-        # world_base_pose = level_pose(world_base_pose)
-        world_ee_pose = world_base_pose @ obs.ee_pose
-
-        return world_base_pose, world_ee_pose, live_phone_pose
+        return obs.arm_base_pose, obs.ee_pose, obs.phone_pose
 
     def move_arm_base_to(self, goal_arm_pose, wait_base=True):
         goal_phone_pose = goal_arm_pose @ np.linalg.inv(self.T_phone2base)
@@ -432,10 +438,10 @@ class RobotEnv:
         rotation_speed = np.clip(yaw_diff * 0.1, -max_rotation, max_rotation)
         
         # Calculate speed based on distance
-        if distance < 0.01:  # Very close to goal
+        if distance < 0.03:  # Very close to goal
             speed = 0
             # When stopped, focus on final orientation
-            if abs(yaw_diff) > np.deg2rad(3):
+            if abs(yaw_diff) > np.deg2rad(5):
                 rotation_speed = np.clip(yaw_diff * 0.3, -max_rotation, max_rotation)
                 if abs(rotation_speed) < min_rotation:
                     rotation_speed = min_rotation * np.sign(rotation_speed)
@@ -445,9 +451,11 @@ class RobotEnv:
                 return True
         else:
             # speed = 90  # max speed
-            # speed = min(90, max(40, distance * 400))
-            # speed = min(90, max(25, distance * 250))
-            speed = 25 if BATTERY else 40
+            if BATTERY:
+                speed = min(90, max(25, distance * 250))
+            else:
+                speed = min(90, max(40, distance * 400))
+            # speed = 25 if BATTERY else 40
 
         print(distance, yaw_diff)
         # print(speed, direction, -rotation_speed)
@@ -460,11 +468,11 @@ class RobotEnv:
         self.move_to_joints(init_config, duration=3.0)
 
         posemat = np.eye(4)
-        posemat[:3, :3] = R.from_euler('xyz', [90, 0, 0], degrees=True).as_matrix()
+        posemat[:3, :3] = R.from_euler('xyz', [60, 0, 0], degrees=True).as_matrix()
         posemat[0, 3] = 0
         posemat[1, 3] = 0.15
         posemat[2, 3] = 0.1
-        self.move_to_pose(posemat, duration=2)
+        self.move_to_pose(posemat, gripper_rad=np.deg2rad(55), duration=2)
 
     def generate_goal_arm_pose(self, ee_pose, z_level, y_offset=0.15):
         # Get the z-axis vector from ee_pose
@@ -489,20 +497,21 @@ class RobotEnv:
 
         return arm_pose
 
-    def move_ee_to(self, goal_ee_pose, wait_base=True):
+    def move_ee_to(self, goal_ee_pose, gripper_rad=0, wait_base=True):
         arm_base_pose, _, _ = self.get_world_pose()
         goal_arm_base_pose = self.generate_goal_arm_pose(goal_ee_pose, arm_base_pose[2, 3])
         # print(arm_base_pose, goal_arm_base_pose)
         goal_ee_wrt_arm = np.linalg.inv(goal_arm_base_pose) @ goal_ee_pose
-        self.move_to_pose(goal_ee_wrt_arm, duration=0)
+        # self.move_to_pose(goal_ee_wrt_arm, gripper_rad=gripper_rad, duration=0)
         self.move_arm_base_to(goal_arm_base_pose, wait_base=wait_base)
 
         if wait_base:
+            time.sleep(0.1)
             # refinement
             arm_base_pose, current_ee_pose, _ = self.get_world_pose()
             # print('goal ee', goal_ee_pose)
             # print('current ee', current_ee_pose)
             goal_ee_wrt_arm = np.linalg.inv(arm_base_pose) @ goal_ee_pose
-            self.move_to_pose(goal_ee_wrt_arm, duration=0)
+            self.move_to_pose(goal_ee_wrt_arm, gripper_rad=gripper_rad, duration=0)
 
         return goal_arm_base_pose
