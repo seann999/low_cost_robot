@@ -366,8 +366,16 @@ class RobotEnv:
         """Send joint positions to the robot."""
         self._send_message({"position": position})
 
+    def get_base_pose(self):
+        return self.tracker.get_latest_position()
+
     def send_base(self, base):
-        self._send_message({"base": base})
+        if isinstance(base, list):
+            self._send_message({"base": base})
+        elif isinstance(base, dict):
+            self._send_message({"base": [base['x'], base['y'], base['yaw']]})
+        else:
+            raise ValueError("Invalid base type")
 
     def send_action(self, joints, base):
         self._send_message({
@@ -389,10 +397,11 @@ class RobotEnv:
 
         return obs.arm_base_pose, obs.ee_pose, obs.phone_pose
 
-    def move_arm_base_to(self, goal_arm_pose, wait_base=True):
+    def move_arm_base_to(self, goal_arm_pose, wait_base=True, timeout=30):
         goal_phone_pose = goal_arm_pose @ np.linalg.inv(self.T_phone2base)
         goal_xyt = self.tracker.calculate_xyt(goal_phone_pose)
 
+        start_time = time.time()
         done = False
         while not done:
             done = self.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
@@ -400,7 +409,26 @@ class RobotEnv:
             if not wait_base:
                 break
 
+            if timeout is not None and (time.time() - start_time) > timeout:
+                print("Base movement timed out")
+                self.stop_base()
+                break
+
             time.sleep(1/50)
+
+    def move_base_to_wait(self, goal_x, goal_y, goal_yaw, timeout=30):
+        done = False
+        start_time = time.time()
+        while not done:
+            done = self.move_base_to(goal_x, goal_y, goal_yaw)
+            time.sleep(1/50)
+
+            if timeout is not None and (time.time() - start_time) > timeout:
+                print("Base movement timed out")
+                self.stop_base()
+                break
+
+        return done
 
     def move_base_to(self, goal_x, goal_y, goal_yaw):
         current_pose = self.tracker.get_latest_position()
@@ -438,7 +466,7 @@ class RobotEnv:
         rotation_speed = np.clip(yaw_diff * 0.1, -max_rotation, max_rotation)
         
         # Calculate speed based on distance
-        if distance < 0.03:  # Very close to goal
+        if distance < 0.01:  # Very close to goal
             speed = 0
             # When stopped, focus on final orientation
             if abs(yaw_diff) > np.deg2rad(5):
@@ -457,7 +485,7 @@ class RobotEnv:
                 speed = min(90, max(40, distance * 400))
             # speed = 25 if BATTERY else 40
 
-        print(distance, yaw_diff)
+        # print(distance, yaw_diff)
         # print(speed, direction, -rotation_speed)
         
         self.send_base([speed, direction, -rotation_speed])
@@ -503,7 +531,7 @@ class RobotEnv:
         # print(arm_base_pose, goal_arm_base_pose)
         goal_ee_wrt_arm = np.linalg.inv(goal_arm_base_pose) @ goal_ee_pose
         # self.move_to_pose(goal_ee_wrt_arm, gripper_rad=gripper_rad, duration=0)
-        self.move_arm_base_to(goal_arm_base_pose, wait_base=wait_base)
+        self.move_arm_base_to(goal_arm_base_pose, wait_base=wait_base, timeout=5)
 
         if wait_base:
             time.sleep(0.1)
