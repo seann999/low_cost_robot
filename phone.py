@@ -122,7 +122,7 @@ class PhoneTracker:
         ])
         self.full_pose = R_convert @ raw_pose
 
-        self.prev_position = self.latest_position
+        self.prev_position = self.latest_position.copy()
         
         # Update latest position using the new function
         self.latest_position = self.calculate_xyt(self.full_pose)
@@ -135,9 +135,30 @@ class PhoneTracker:
         
         self.package_cnt += 1
 
-    def get_latest_position(self):
-        """Returns the latest x, y, and yaw values of the phone along with initialization status."""
-        return {**self.latest_position, 'initialized': self.received_first_message}
+    # def get_latest_position(self):
+    #     """Returns the latest x, y, and yaw values of the phone along with initialization status."""
+    #     return {**self.latest_position, 'initialized': self.received_first_message}
+
+    def get_latest_state(self):
+        state = {**self.latest_position, 'initialized': self.received_first_message}
+        
+        # Calculate velocities if we have both positions and timestamps
+        if self.received_first_message and 'timestamp' in self.latest_position and 'timestamp' in self.prev_position:
+            dt = self.latest_position['timestamp'] - self.prev_position['timestamp']
+            if dt > 0:  # Avoid division by zero
+                state['vx'] = (self.latest_position['x'] - self.prev_position['x']) / dt
+                state['vy'] = (self.latest_position['y'] - self.prev_position['y']) / dt
+                # Calculate angular velocity (handle wraparound for yaw)
+                dyaw = self.latest_position['yaw'] - self.prev_position['yaw']
+                # Normalize angular difference to [-pi, pi]
+                dyaw = (dyaw + np.pi) % (2 * np.pi) - np.pi
+                state['vyaw'] = dyaw / dt
+            else:
+                state['vx'] = state['vy'] = state['vyaw'] = 0.0
+        else:
+            state['vx'] = state['vy'] = state['vyaw'] = 0.0
+            
+        return state
 
     def _run_server(self):
         """Runs the socketio server in a separate thread."""
@@ -223,12 +244,12 @@ class PhoneTracker:
 if __name__ == '__main__':
     np.set_printoptions(precision=4, suppress=True)
     tracker = PhoneTracker(port=5555, enable_visualization=True)
-    
-    # Example of how to get position in a loop
+
     try:
         while True:
-            position = tracker.get_latest_position()
+            position = tracker.get_latest_state()
             print(f"X: {position['x']:.3f}, Y: {position['y']:.3f}, Yaw: {position['yaw']:.3f}")
+            print(f"vX: {position['vx']:.3f}, vY: {position['vy']:.3f}, vYaw: {position['vyaw']:.3f}")
             time.sleep(0.1)
     except KeyboardInterrupt:
         print("Shutting down...")
