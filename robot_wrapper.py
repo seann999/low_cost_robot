@@ -64,7 +64,6 @@ robot_arm_chain = Chain.from_urdf_file(modified_urdf)
 
 from plotter import KinematicsPlotter
 plotter = KinematicsPlotter()
-plotter.initialize_plot(plot_id="follower")
 
 
 def pose7d_to_matrix(pose):
@@ -383,9 +382,30 @@ class RobotEnv:
             "base": base
         })
 
-    def stop_base(self):
+    def stop_base(self, check=True):
         self.send_base([0, 0, 0])
-            
+
+        if not check:
+            return
+
+        prev_base_state = self.get_base_pose()
+        stops = 0
+        while stops < 5:
+            self.send_base([0, 0, 0])
+            curr_base_state = self.get_base_pose()
+            if prev_base_state['timestamp'] == curr_base_state['timestamp']:
+                continue
+            movement = (curr_base_state['x'] - prev_base_state['x'])**2 + (curr_base_state['y'] - prev_base_state['y'])**2
+            stopped = movement < 0.0001
+
+            if stopped:
+                stops += 1
+            else:
+                stops = 0
+
+            prev_base_state = curr_base_state
+            time.sleep(1/50)
+
     def close(self):
         self.stop_base()
         self.running = False
@@ -397,14 +417,14 @@ class RobotEnv:
 
         return obs.arm_base_pose, obs.ee_pose, obs.phone_pose
 
-    def move_arm_base_to(self, goal_arm_pose, wait_base=True, timeout=30):
+    def move_arm_base_to(self, goal_arm_pose, wait_base=True, timeout=30, **kwargs):
         goal_phone_pose = goal_arm_pose @ np.linalg.inv(self.T_phone2base)
         goal_xyt = self.tracker.calculate_xyt(goal_phone_pose)
 
         start_time = time.time()
         done = False
         while not done:
-            done = self.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
+            done = self.move_base_to(goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'], **kwargs)
 
             if not wait_base:
                 break
@@ -416,13 +436,18 @@ class RobotEnv:
 
             time.sleep(1/50)
 
-    def move_base_to_wait(self, goal_x, goal_y, goal_yaw, timeout=30):
-        done = False
+    def move_base_to_wait(self, goal_x, goal_y, goal_yaw, timeout=30, **kwargs):
+        dones = 0
         start_time = time.time()
-        while not done:
-            done = self.move_base_to(goal_x, goal_y, goal_yaw)
+        while dones < 10:
+            done = self.move_base_to(goal_x, goal_y, goal_yaw, **kwargs)
             time.sleep(1/50)
 
+            if done:
+                dones += 1
+            else:
+                dones = 0
+    
             if timeout is not None and (time.time() - start_time) > timeout:
                 print("Base movement timed out")
                 self.stop_base()
@@ -430,7 +455,7 @@ class RobotEnv:
 
         return done
 
-    def move_base_to(self, goal_x, goal_y, goal_yaw):
+    def move_base_to(self, goal_x, goal_y, goal_yaw, pos_tol=0.01, yaw_tol=5):
         current_pose = self.tracker.get_latest_position()
 
         curr_x = current_pose['x']
@@ -466,10 +491,10 @@ class RobotEnv:
         rotation_speed = np.clip(yaw_diff * 0.1, -max_rotation, max_rotation)
         
         # Calculate speed based on distance
-        if distance < 0.01:  # Very close to goal
+        if distance < pos_tol:  # Very close to goal
             speed = 0
             # When stopped, focus on final orientation
-            if abs(yaw_diff) > np.deg2rad(5):
+            if abs(yaw_diff) > np.deg2rad(yaw_tol):
                 rotation_speed = np.clip(yaw_diff * 0.3, -max_rotation, max_rotation)
                 if abs(rotation_speed) < min_rotation:
                     rotation_speed = min_rotation * np.sign(rotation_speed)
@@ -479,10 +504,14 @@ class RobotEnv:
                 return True
         else:
             # speed = 90  # max speed
+            # todo: add damping
+            k = 10
             if BATTERY:
-                speed = min(90, max(25, distance * 250))
+                a = 25
             else:
-                speed = min(90, max(40, distance * 400))
+                a = 40
+            
+            speed = min(90, max(a, distance * a * k))
             # speed = 25 if BATTERY else 40
 
         # print(distance, yaw_diff)

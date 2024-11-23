@@ -46,7 +46,8 @@ class PhoneTracker:
         
         # State variables
         self.latest_position = {'x': 0, 'y': 0, 'yaw': 0}
-        self.prev_time = 0
+        self.prev_position = {'x': 0, 'y': 0, 'yaw': 0}
+
         self.package_cnt = 0
         self.received_first_message = False
         self.full_pose = None
@@ -95,12 +96,13 @@ class PhoneTracker:
         up_vector = np.array([0, 0, 1])
         right_vector = rotation_matrix[:3, 0]
         forward_vector = np.cross(right_vector, up_vector)
-        phone_to_center_distance = 0.074
+        phone_to_center_distance_long = 0.06
+        phone_to_center_distance_lat = 0
         yaw = float(np.arctan2(forward_vector[1], forward_vector[0]))
         
         return {
-            'x': float(position[0] + np.cos(yaw) * phone_to_center_distance),
-            'y': float(position[1] + np.sin(yaw) * phone_to_center_distance),
+            'x': float(position[0] + np.cos(yaw) * phone_to_center_distance_long + np.sin(yaw) * phone_to_center_distance_lat),
+            'y': float(position[1] + np.sin(yaw) * phone_to_center_distance_long - np.cos(yaw) * phone_to_center_distance_lat),
             'yaw': yaw
         }
 
@@ -110,7 +112,7 @@ class PhoneTracker:
         # Rotation matrix to convert from +y up to +z up coordinate system
         
         raw_pose = structured_data.transform_matrix
-        raw_pose[:3, 3] += raw_pose[:3, 0] * 0.06
+        raw_pose[:3, 3] += raw_pose[:3, 0] * 0.03
         raw_pose[:3, 3] -= raw_pose[:3, 1] * 0.02
         R_convert = np.array([
             [1, 0, 0, 0],
@@ -119,16 +121,18 @@ class PhoneTracker:
             [0, 0, 0, 1]
         ])
         self.full_pose = R_convert @ raw_pose
+
+        self.prev_position = self.latest_position
         
         # Update latest position using the new function
         self.latest_position = self.calculate_xyt(self.full_pose)
+        self.latest_position['timestamp'] = structured_data.timestamp
         
         if self.enable_visualization:
             if not self.initialized:
                 self._init_visualization()
             self._update_visualization(self.latest_position)
         
-        self.prev_time = structured_data.timestamp
         self.package_cnt += 1
 
     def get_latest_position(self):
