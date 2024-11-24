@@ -597,13 +597,21 @@ class RobotEnv:
 
 
     def move_arm_trajectory(self, t):
-        goal = self.arm_trajectory.get_state(t)
+        try:
+            goal = self.arm_trajectory.get_state(t)
+        except ValueError:
+            return
+
         positions = np.round(goal['position']).astype(int).tolist()
         self.send_joints(positions)
 
     def move_base_trajectory(self, t):
         base_state = self.tracker.get_latest_state()
-        goal = self.base_trajectory.get_state(t)
+
+        try:
+            goal = self.base_trajectory.get_state(t)
+        except ValueError:
+            return
 
         curr_x = base_state['x']
         curr_y = base_state['y']

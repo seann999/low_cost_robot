@@ -77,6 +77,11 @@ class BaseTrajectory:
         # Find where to insert the new waypoint
         insert_idx = np.searchsorted(self.times, t)
         
+        # Calculate number of waypoints that will be dropped
+        num_dropped = len(self.times) - insert_idx
+        if num_dropped > 0:
+            print(f"Dropping {num_dropped} waypoint{'s' if num_dropped > 1 else ''} after time {t}")
+        
         # Remove any waypoints that occur after this time
         self.times = self.times[:insert_idx]
         self.x_points = self.x_points[:insert_idx]
