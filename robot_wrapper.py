@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 from scipy.spatial.transform import Rotation as R
 
 from phone import PhoneTracker
+from trajectory import BaseTrajectory, JointTrajectory
 
 from umi.common.pose_util import mat_to_pose10d, rot6d_to_mat
 import json
@@ -168,6 +169,12 @@ class RobotEnv:
         self.tracker = PhoneTracker(port=5555, enable_visualization=False) if track_phone else None
         self.track_phone = track_phone
 
+        self.base_trajectory = BaseTrajectory()
+        self.arm_trajectory = JointTrajectory()
+        self.command_speed = 0
+        self.command_direction = 0
+        self.command_rotation = 0
+
         self.T_phone2base = None
         
     def _receive_sized_message(self, sock):
@@ -300,11 +307,15 @@ class RobotEnv:
         with self._lock:
             return self.latest_observation
 
-    def move_to_pose(self, pose_matrix, gripper_rad=0, duration=3.0):
+    def calculate_joints(self, pose_matrix, gripper_rad=0):
         current_joints = self.get_observation().joints
         pose7d = matrix_to_pose7d(pose_matrix)
         gripper_joint = int(gripper_rad / np.pi * 2048 + 2048)
         joints = pose7d_to_joints(pose7d, gripper_joint, initial_position=current_joints)
+        return joints
+
+    def move_to_pose(self, pose_matrix, gripper_rad=0, duration=3.0):
+        joints = self.calculate_joints(pose_matrix, gripper_rad)
         self.move_to_joints(joints, duration)
 
     def move_to_joints(self, joints, duration=3.0):
@@ -366,7 +377,7 @@ class RobotEnv:
         self._send_message({"position": position})
 
     def get_base_pose(self):
-        return self.tracker.get_latest_position()
+        return self.tracker.get_latest_state()
 
     def send_base(self, base):
         if isinstance(base, list):
@@ -456,7 +467,7 @@ class RobotEnv:
         return done
 
     def move_base_to(self, goal_x, goal_y, goal_yaw, pos_tol=0.01, yaw_tol=5):
-        current_pose = self.tracker.get_latest_position()
+        current_pose = self.tracker.get_latest_state()
 
         curr_x = current_pose['x']
         curr_y = current_pose['y']
@@ -560,7 +571,7 @@ class RobotEnv:
         # print(arm_base_pose, goal_arm_base_pose)
         goal_ee_wrt_arm = np.linalg.inv(goal_arm_base_pose) @ goal_ee_pose
         # self.move_to_pose(goal_ee_wrt_arm, gripper_rad=gripper_rad, duration=0)
-        self.move_arm_base_to(goal_arm_base_pose, wait_base=wait_base, timeout=5)
+        self.move_arm_base_to(goal_arm_base_pose, wait_base=wait_base, timeout=5, pos_tol=0.03, yaw_tol=3)
 
         if wait_base:
             time.sleep(0.1)
@@ -572,3 +583,69 @@ class RobotEnv:
             self.move_to_pose(goal_ee_wrt_arm, gripper_rad=gripper_rad, duration=0)
 
         return goal_arm_base_pose
+
+    def add_ee_waypoint(self, t, goal_ee_pose, gripper_rad=0):
+        arm_base_pose, _, _ = self.get_world_pose()
+        goal_arm_base_pose = self.generate_goal_arm_pose(goal_ee_pose, arm_base_pose[2, 3])
+        goal_phone_pose = goal_arm_base_pose @ np.linalg.inv(self.T_phone2base)
+        goal_xyt = self.tracker.calculate_xyt(goal_phone_pose)
+        self.base_trajectory.add_waypoint(t, goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
+        
+        goal_ee_wrt_arm = np.linalg.inv(goal_arm_base_pose) @ goal_ee_pose
+        joints = self.calculate_joints(goal_ee_wrt_arm, gripper_rad)
+        self.arm_trajectory.add_waypoint(t, joints)
+
+
+    def move_arm_trajectory(self, t):
+        goal = self.arm_trajectory.get_state(t)
+        positions = np.round(goal['position']).astype(int).tolist()
+        self.send_joints(positions)
+
+    def move_base_trajectory(self, t):
+        base_state = self.tracker.get_latest_state()
+        goal = self.base_trajectory.get_state(t)
+
+        curr_x = base_state['x']
+        curr_y = base_state['y']
+        
+        curr_vx = base_state['vx']
+        curr_vy = base_state['vy']
+        curr_yaw = base_state['yaw']
+        curr_vyaw = base_state['vyaw'] 
+
+        K_pos_gain = 1.0
+        K_rot_gain = 1.0
+        diff_x = goal['x'] - curr_x
+        diff_y = goal['y'] - curr_y
+        diff_yaw = goal['yaw'] - curr_yaw
+        # print(diff_yaw, goal['yaw'], curr_yaw)
+        diff_yaw = math.atan2(math.sin(diff_yaw), math.cos(diff_yaw))
+
+        goal_vx = goal['vx'] + diff_x * K_pos_gain
+        goal_vy = goal['vy'] + diff_y * K_pos_gain
+        goal_vyaw = goal['vyaw'] + diff_yaw * K_rot_gain
+        # print('v', goal_vyaw, goal['vyaw'], diff_yaw)
+        
+        goal_angle = math.atan2(goal_vy, goal_vx)
+        relative_angle = math.degrees(goal_angle - curr_yaw)
+        # Normalize angle to [-180, 180]
+        relative_angle = ((relative_angle + 180) % 360) - 180
+        # Convert to robot's direction system (0 is left, 90 is forward)
+        self.command_direction = relative_angle + 90
+
+        curr_speed = math.sqrt(curr_vx*curr_vx + curr_vy*curr_vy)
+        goal_speed = math.sqrt(goal_vx*goal_vx + goal_vy*goal_vy)
+        diff_speed = goal_speed - curr_speed
+        self.command_speed += diff_speed * 10.0
+        self.command_speed = np.clip(self.command_speed, 0, 90)
+
+        # Normalize yaw difference to [-pi, pi] for shortest rotation
+        diff_yaw = goal_vyaw - curr_vyaw
+        self.command_rotation += diff_yaw * 0.01
+        self.command_rotation = np.clip(self.command_rotation, -0.3, 0.3)
+
+        self.send_base([self.command_speed, self.command_direction, -self.command_rotation])
+
+        # sleep_time = 1/50 - (time.time() - current_time)
+        # if sleep_time > 0:
+        #     time.sleep(sleep_time)
