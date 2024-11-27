@@ -92,19 +92,32 @@ def get_obs_dict(history):
 
 def execute_actions(env, history, action_seq):
     poses = dict()
-    curr_time = time.time()
-    dt = 1/5
-    exec_action_seq = action_seq[:6]
+    hz = 4.0
+    dt = 1/hz
+    max_action_len = 8
+    exec_action_seq = action_seq[:max_action_len]
+    obs_timestamp = history[-1].received_timestamp
+    waypoints = []
+    print('latency', time.time() - obs_timestamp)
 
     for i, action in enumerate(exec_action_seq):
         new_cam_mat, new_ee_mat = cam_move_to_ee(history[-1].cam_pose, action[:3], action[3:9])
         gripper_offset = np.deg2rad(0)
         gripper_rad = action[9] - gripper_offset
-        waypoint_time = curr_time + dt * i
+        # waypoint_time = curr_time + dt * i
+        waypoint_time = obs_timestamp + dt * i
+        waypoints.append((waypoint_time, new_ee_mat, gripper_rad))
 
+    added_waypoints = 0
+    for waypoint_time, new_ee_mat, gripper_rad in waypoints:
+        if waypoint_time < time.time():
+            continue
         env.add_ee_waypoint(waypoint_time, new_ee_mat, gripper_rad)
+        added_waypoints += 1
 
-    time.sleep(dt * len(exec_action_seq))
+    print('added_waypoints', added_waypoints)
+    # time.sleep(dt * max_action_len)
+    time.sleep(dt * 6)
 
 def trajectory_executor(env, stop_event):
     while not stop_event.is_set():
@@ -162,7 +175,7 @@ def main():
             action_seq = result['action_pred'][0].detach().to('cpu').numpy()
 
             if running or execute_once:
-                print('obs gripper width', np.rad2deg(obs_dict_np['robot0_gripper_width']))
+                # print('obs gripper width', np.rad2deg(obs_dict_np['robot0_gripper_width']))
                 image = draw_actions(history[-1].image.copy(), action_seq[:, :3], action_seq[:, -1])
                 cv2.imshow('Camera', image)
 
@@ -199,6 +212,10 @@ def main():
         if 'executor_thread' in locals():
             executor_thread.join(timeout=1.0)
         cv2.destroyAllWindows()
+
+        waypoints = list(zip(env.base_trajectory.x_points, env.base_trajectory.y_points))
+        env.stop_base()
+        # env.create_animation(waypoints=waypoints)
         env.close()
         print("Connection closed")
 

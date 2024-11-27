@@ -157,6 +157,7 @@ class Observation:
     cam_pose: Optional[np.ndarray]
     arm_base_pose: Optional[np.ndarray]
     phone_pose: Optional[np.ndarray]
+    received_timestamp: Optional[float]
     
 class BaseTrajectoryTracker:
     def __init__(self):
@@ -307,6 +308,8 @@ class EndEffectorTracker:
         # Store actual trajectory data
         self.x_points = []
         self.y_points = []
+        self.actual_poses = []
+        self.desired_poses = []
         self.time_points = []
         # Store goal trajectory
         self.goal_x = []
@@ -325,6 +328,8 @@ class EndEffectorTracker:
         # Store current state
         self.x_points.append(ee_pose[0, 3])
         self.y_points.append(ee_pose[1, 3])
+        self.actual_poses.append(ee_pose)
+        self.desired_poses.append(goal_ee_pose)
         self.time_points.append(time.time() - self.start_time)
         
         # Store goal state
@@ -428,6 +433,7 @@ class RobotEnv:
         while self.running:
             try:
                 # Receive position data
+                received_timestamp = time.time()
                 position_data = self._receive_sized_message(self.client_socket)
                 header = json.loads(position_data.decode())
                 follower_joints = header['position']
@@ -455,6 +461,7 @@ class RobotEnv:
                             world_cam_pose,
                             world_base_pose,
                             phone_pose,
+                            received_timestamp,
                         )
                         
             except (ConnectionError, json.JSONDecodeError) as e:
@@ -810,7 +817,7 @@ class RobotEnv:
         curr_vyaw = base_state['vyaw'] 
 
         K_pos_gain = 1.0
-        K_rot_gain = 1.0
+        K_rot_gain = 100.0
         diff_x = goal['x'] - curr_x
         diff_y = goal['y'] - curr_y
         diff_yaw = goal['yaw'] - curr_yaw

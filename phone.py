@@ -153,10 +153,13 @@ class PhoneTracker:
                 # Normalize angular difference to [-pi, pi]
                 dyaw = (dyaw + np.pi) % (2 * np.pi) - np.pi
                 state['vyaw'] = dyaw / dt
+                state['dt'] = dt
             else:
                 state['vx'] = state['vy'] = state['vyaw'] = 0.0
+                state['dt'] = 0.0
         else:
             state['vx'] = state['vy'] = state['vyaw'] = 0.0
+            state['dt'] = 0.0
             
         return state
 
