@@ -158,6 +158,150 @@ class Observation:
     arm_base_pose: Optional[np.ndarray]
     phone_pose: Optional[np.ndarray]
     
+class BaseTrajectoryTracker:
+    def __init__(self):
+        # Store ALL trajectory data
+        self.x_points = []
+        self.y_points = []
+        self.time_points = []
+        self.curr_vy_points = []
+        self.goal_vy_points = []
+        self.yaw_points = []
+        # Store goal trajectory
+        self.goal_x = []
+        self.goal_y = []
+        self.goal_yaw = []
+        self.start_time = None
+        self.command_speed = []
+        self.command_dir = []
+        self.command_rot = []
+        
+    def reset(self):
+        """Clear all stored data and reset start time"""
+        self.__init__()
+        
+    def update(self, base_state, goal, command_speed=0, command_dir=0, command_rot=0):
+        """Store new state and goal data"""
+        if self.start_time is None:
+            self.start_time = time.time()
+            
+        # Store current state
+        self.x_points.append(base_state['x'])
+        self.y_points.append(base_state['y'])
+        self.time_points.append(time.time() - self.start_time)
+        self.curr_vy_points.append(base_state['vy'])
+        self.yaw_points.append(base_state['yaw'])
+        self.command_speed.append(command_speed)
+        self.command_dir.append(command_dir)
+        self.command_rot.append(command_rot)
+        
+        # Store goal state
+        self.goal_x.append(goal['x'])
+        self.goal_y.append(goal['y'])
+        self.goal_yaw.append(goal['yaw'])
+        self.goal_vy_points.append(goal['vy'])
+        
+    def create_animation(self, waypoints=None, save_path='trajectory.mp4'):
+        """Create and save an animation of the trajectory"""
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FuncAnimation, FFMpegWriter
+        
+        fig, ax = plt.subplots(figsize=(10, 10))
+        
+        def animate(frame):
+            if frame % 10 == 0:
+                print(f"Rendering frame {frame}/{num_frames} ({(frame/num_frames)*100:.1f}%)")
+            
+            ax.clear()
+            
+            # Plot full desired trajectory as reference (faded)
+            ax.plot(self.goal_x, self.goal_y, 'r-', label='Desired Path', linewidth=1, alpha=0.1)
+            
+            # Calculate end_idx based on total points and desired duration
+            end_idx = int((frame / num_frames) * len(self.x_points))
+            if end_idx > 0:
+                ax.plot(self.x_points[:end_idx], self.y_points[:end_idx], 'b-', 
+                       label='Actual Path', linewidth=1, alpha=0.3)
+                
+                # Add direction arrows along both trajectories
+                arrow_spacing = 10  # Show an arrow every N points
+                for i in range(0, end_idx, arrow_spacing):
+                    # Actual trajectory arrows
+                    arrow_length = 0.005
+                    dx = arrow_length * math.cos(self.yaw_points[i])
+                    dy = arrow_length * math.sin(self.yaw_points[i])
+                    ax.arrow(self.x_points[i], self.y_points[i], dx, dy,
+                            head_width=0.002, head_length=0.002, fc='b', ec='b', alpha=0.5)
+                    
+                    # Desired trajectory arrows
+                    dx = arrow_length * math.cos(self.goal_yaw[i])
+                    dy = arrow_length * math.sin(self.goal_yaw[i])
+                    ax.arrow(self.goal_x[i], self.goal_y[i], dx, dy,
+                            head_width=0.002, head_length=0.002, fc='r', ec='r', alpha=0.5)
+                
+                # Plot current position arrows (larger)
+                if end_idx < len(self.x_points):
+                    arrow_length = 0.02
+                    # Current position arrow (blue)
+                    dx = arrow_length * math.cos(self.yaw_points[end_idx-1])
+                    dy = arrow_length * math.sin(self.yaw_points[end_idx-1])
+                    ax.arrow(self.x_points[end_idx-1], self.y_points[end_idx-1], dx, dy,
+                            head_width=0.01, head_length=0.01, fc='b', ec='b')
+                    
+                    # Desired position arrow (red)
+                    dx = arrow_length * math.cos(self.goal_yaw[end_idx-1])
+                    dy = arrow_length * math.sin(self.goal_yaw[end_idx-1])
+                    ax.arrow(self.goal_x[end_idx-1], self.goal_y[end_idx-1], dx, dy,
+                            head_width=0.01, head_length=0.01, fc='r', ec='r')
+            
+            # Plot waypoints if provided
+            if waypoints is not None:
+                waypoint_x, waypoint_y = zip(*waypoints)
+                ax.scatter(waypoint_x, waypoint_y, color='green', s=100, label='Waypoints')
+            
+            ax.set_xlabel('X Position (m)')
+            ax.set_ylabel('Y Position (m)')
+            ax.set_title(f'Robot Trajectory (t={frame/50:.2f}s)')
+            ax.grid(True)
+            ax.axis('equal')
+            ax.legend()
+            
+            # Set consistent axis limits
+            ax.set_xlim(min(self.goal_x)-0.1, max(self.goal_x)+0.1)
+            ax.set_ylim(min(self.goal_y)-0.1, max(self.goal_y)+0.1)
+            
+            # Add command text in top-left corner
+            if end_idx > 0:
+                command_text = (
+                    f"Speed: {self.command_speed[end_idx-1]:.1f}\n"
+                    f"Direction: {self.command_dir[end_idx-1]:.1f}\n"
+                    f"Rotation: {self.command_rot[end_idx-1]:.3f}"
+                )
+                ax.text(0.02, 0.98, command_text,
+                       transform=ax.transAxes,
+                       verticalalignment='top',
+                       fontfamily='monospace',
+                       bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+        
+        # Create animation
+        desired_fps = 50
+        animation_duration = self.time_points[-1]  # Use actual duration
+        num_frames = int(desired_fps * animation_duration)
+        print(f"\nStarting animation creation...")
+        print(f"Total frames to render: {num_frames}")
+        print(f"Expected duration: {animation_duration} seconds at {desired_fps} FPS")
+
+        anim = FuncAnimation(fig, animate, frames=num_frames, 
+                            interval=1000/desired_fps, repeat=False)
+
+        # Save as MP4
+        print(f"\nSaving animation to MP4...")
+        writer = FFMpegWriter(fps=50, bitrate=2000)
+        anim.save(save_path, writer=writer)
+        print("Animation saved successfully!")
+        
+        plt.show()
+
 class RobotEnv:
     def __init__(self, host: str = '192.168.0.231', port: int = 5000, track_phone: bool = True):
         self.host = host
@@ -176,6 +320,7 @@ class RobotEnv:
         self.command_rotation = 0
 
         self.T_phone2base = None
+        self.trajectory_tracker = BaseTrajectoryTracker()
         
     def _receive_sized_message(self, sock):
         """Helper method to receive a size-prefixed message."""
@@ -650,9 +795,18 @@ class RobotEnv:
         # Normalize yaw difference to [-pi, pi] for shortest rotation
         diff_yaw = goal_vyaw - curr_vyaw
         self.command_rotation += diff_yaw * 0.01
-        self.command_rotation = np.clip(self.command_rotation, -0.3, 0.3)
+        self.command_rotation = -np.clip(self.command_rotation, -0.3, 0.3)
 
-        self.send_base([self.command_speed, self.command_direction, -self.command_rotation])
+        self.send_base([self.command_speed, self.command_direction, self.command_rotation])
+
+        # Update trajectory tracker
+        self.trajectory_tracker.update(
+            base_state, 
+            goal, 
+            command_speed=self.command_speed,
+            command_dir=self.command_direction,
+            command_rot=self.command_rotation
+        )
 
         # sleep_time = 1/50 - (time.time() - current_time)
         # if sleep_time > 0:
