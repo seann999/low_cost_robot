@@ -1,6 +1,6 @@
 import time
 from robot import Robot
-from robot_wrapper import RobotEnv
+from robot_wrapper import RobotEnv, plotter
 import numpy as np
 import math
 import csv
@@ -18,27 +18,29 @@ def main():
         env.move_base_to_wait(0, 0, 0, pos_tol=0.01, yaw_tol=3)
         time.sleep(1)
 
-        # Add waypoints (time, x, y, yaw)
-        # env.base_trajectory.add_waypoint(0.0, 0.0, 0.0, 0.0)
-        # env.base_trajectory.add_waypoint(2.0, 0.2, 0.0, 0.0)
-        # env.base_trajectory.add_waypoint(4.0, 0.2, 0.2, -3.14*0.5)
-
-        # env.arm_trajectory.add_waypoint(0.0, [2088, 2071, 1773, 3058, 2078, 2890])
-        # env.arm_trajectory.add_waypoint(5.0, [2088, 2071, 1973, 3258, 2278, 2890])
         obs = env.get_observation()
-        env.add_ee_waypoint(0.0, obs.ee_pose, 0.0)
-        x2 = obs.ee_pose.copy()
+        # env.add_ee_waypoint(0.0, obs.ee_pose, 0.0)
+        # x2 = obs.ee_pose.copy()
         # x2[2, 3] -= 0.05
         # x2[0, 3] += 0.3
-        env.add_ee_waypoint(30.0, x2, 0.0)
+        # env.add_ee_waypoint(30.0, x2, 0.0)
         # x3 = x2.copy()
         # x3[2, 3] -= 0.05
         # x3[1, 3] += 0.2
         # env.add_ee_waypoint(6.0, x3, 0)
 
+        origin = obs.ee_pose.copy()
+
+        for i in range(300):
+            # ee_pose[2, 3] = np.sin(i * 0.1) * 0.03 + 0.05
+            ee_pose = origin.copy()
+            ee_pose[:3, 3] += ee_pose[:3, 2] * np.sin(i * 0.1) * 0.1
+            ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.1
+            env.add_ee_waypoint(0.1 * i, ee_pose, 0.0)
+
         start_time = time.time()
 
-        while time.time() - start_time < 60: #30.0:
+        while time.time() - start_time < 30.0:
             current_time = time.time()
             # print(current_time)
             env.move_base_trajectory(time.time() - start_time)
@@ -52,7 +54,9 @@ def main():
 
         waypoints = list(zip(env.base_trajectory.x_points, env.base_trajectory.y_points))  # Convert trajectory waypoints
         # env.trajectory_tracker.create_animation(waypoints=waypoints)
-        env.create_animation(waypoints=waypoints)
+        # env.create_animation(waypoints=waypoints)
+
+        plotter.plot_poses({k: (v, "") for k, v in enumerate(env.ee_tracker.actual_poses)}, dots_only=True)
 
         print('done')
     except KeyboardInterrupt:
