@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from scipy.spatial.transform import Rotation as R
 
 from phone import PhoneTracker
-from trajectory import BaseTrajectory, JointTrajectory
+from trajectory import BaseTrajectory, JointTrajectory, PoseMatrixTrajectory
 
 from umi.common.pose_util import mat_to_pose10d, rot6d_to_mat
 import json
@@ -302,6 +302,35 @@ class BaseTrajectoryTracker:
         
         plt.show()
 
+class EndEffectorTracker:
+    def __init__(self):
+        # Store actual trajectory data
+        self.x_points = []
+        self.y_points = []
+        self.time_points = []
+        # Store goal trajectory
+        self.goal_x = []
+        self.goal_y = []
+        self.start_time = None
+        
+    def reset(self):
+        """Clear all stored data and reset start time"""
+        self.__init__()
+        
+    def update(self, ee_pose, goal_ee_pose):
+        """Store new state and goal data"""
+        if self.start_time is None:
+            self.start_time = time.time()
+            
+        # Store current state
+        self.x_points.append(ee_pose[0, 3])
+        self.y_points.append(ee_pose[1, 3])
+        self.time_points.append(time.time() - self.start_time)
+        
+        # Store goal state
+        self.goal_x.append(goal_ee_pose[0, 3])
+        self.goal_y.append(goal_ee_pose[1, 3])
+
 class RobotEnv:
     def __init__(self, host: str = '192.168.0.231', port: int = 5000, track_phone: bool = True):
         self.host = host
@@ -315,12 +344,14 @@ class RobotEnv:
 
         self.base_trajectory = BaseTrajectory()
         self.arm_trajectory = JointTrajectory()
+        self.pose_trajectory = PoseMatrixTrajectory()
         self.command_speed = 0
         self.command_direction = 0
         self.command_rotation = 0
 
         self.T_phone2base = None
         self.trajectory_tracker = BaseTrajectoryTracker()
+        self.ee_tracker = EndEffectorTracker()
         
     def _receive_sized_message(self, sock):
         """Helper method to receive a size-prefixed message."""
@@ -730,6 +761,8 @@ class RobotEnv:
         return goal_arm_base_pose
 
     def add_ee_waypoint(self, t, goal_ee_pose, gripper_rad=0):
+        self.pose_trajectory.add_waypoint(t, goal_ee_pose)
+
         arm_base_pose, _, _ = self.get_world_pose()
         goal_arm_base_pose = self.generate_goal_arm_pose(goal_ee_pose, arm_base_pose[2, 3])
         goal_phone_pose = goal_arm_base_pose @ np.linalg.inv(self.T_phone2base)
@@ -743,12 +776,22 @@ class RobotEnv:
 
     def move_arm_trajectory(self, t):
         try:
-            goal = self.arm_trajectory.get_state(t)
+            goal_joints = self.arm_trajectory.get_state(t)
+            goal_ee_pose = self.pose_trajectory.get_state(t)['pose']
         except ValueError:
             return
 
-        positions = np.round(goal['position']).astype(int).tolist()
-        self.send_joints(positions)
+        # positions = np.round(goal_joints['position']).astype(int).tolist()
+        # self.send_joints(positions)
+
+        current_arm_base_pose, current_ee_pose, _ = self.get_world_pose()
+        goal_ee_wrt_arm = np.linalg.inv(current_arm_base_pose) @ goal_ee_pose
+        joints = self.calculate_joints(goal_ee_wrt_arm, 0)
+        joints[-1] = int(goal_joints['position'][-1])
+        self.send_joints(joints)
+        
+        # Update EE tracker
+        self.ee_tracker.update(current_ee_pose, goal_ee_pose)
 
     def move_base_trajectory(self, t):
         base_state = self.tracker.get_latest_state()
@@ -811,3 +854,126 @@ class RobotEnv:
         # sleep_time = 1/50 - (time.time() - current_time)
         # if sleep_time > 0:
         #     time.sleep(sleep_time)
+
+    def create_animation(self, waypoints=None, save_path='trajectory.mp4'):
+        """Create and save an animation of both base and end effector trajectories"""
+        import matplotlib.pyplot as plt
+        from matplotlib.animation import FuncAnimation, FFMpegWriter
+        
+        fig, ax = plt.subplots(figsize=(10, 10))
+        
+        def animate(frame):
+            if frame % 10 == 0:
+                print(f"Rendering frame {frame}/{num_frames} ({(frame/num_frames)*100:.1f}%)")
+            
+            ax.clear()
+            
+            # Plot full desired trajectories as reference (faded)
+            # Base trajectory
+            ax.plot(self.trajectory_tracker.goal_x, self.trajectory_tracker.goal_y, 
+                    'r-', label='Desired Base Path', linewidth=1, alpha=0.1)
+            # End effector trajectory
+            ax.plot(self.ee_tracker.goal_x, self.ee_tracker.goal_y,
+                    'm-', label='Desired EE Path', linewidth=1, alpha=0.1)
+            
+            # Calculate end_idx based on total points and desired duration
+            end_idx = int((frame / num_frames) * len(self.trajectory_tracker.x_points))
+            if end_idx > 0:
+                # Plot actual trajectories
+                # Base trajectory
+                ax.plot(self.trajectory_tracker.x_points[:end_idx], 
+                        self.trajectory_tracker.y_points[:end_idx], 
+                        'b-', label='Actual Base Path', linewidth=1, alpha=0.3)
+                # End effector trajectory
+                ax.plot(self.ee_tracker.x_points[:end_idx],
+                        self.ee_tracker.y_points[:end_idx],
+                        'g-', label='Actual EE Path', linewidth=1, alpha=0.3)
+                
+                # Add direction arrows along base trajectories
+                arrow_spacing = 10  # Show an arrow every N points
+                for i in range(0, end_idx, arrow_spacing):
+                    # Actual trajectory arrows
+                    arrow_length = 0.005
+                    dx = arrow_length * math.cos(self.trajectory_tracker.yaw_points[i])
+                    dy = arrow_length * math.sin(self.trajectory_tracker.yaw_points[i])
+                    ax.arrow(self.trajectory_tracker.x_points[i], 
+                            self.trajectory_tracker.y_points[i], dx, dy,
+                            head_width=0.002, head_length=0.002, fc='b', ec='b', alpha=0.5)
+                    
+                    # Desired trajectory arrows
+                    dx = arrow_length * math.cos(self.trajectory_tracker.goal_yaw[i])
+                    dy = arrow_length * math.sin(self.trajectory_tracker.goal_yaw[i])
+                    ax.arrow(self.trajectory_tracker.goal_x[i], 
+                            self.trajectory_tracker.goal_y[i], dx, dy,
+                            head_width=0.002, head_length=0.002, fc='r', ec='r', alpha=0.5)
+                
+                # Plot current positions (larger markers)
+                if end_idx < len(self.trajectory_tracker.x_points):
+                    # Current base position arrow (blue)
+                    arrow_length = 0.02
+                    dx = arrow_length * math.cos(self.trajectory_tracker.yaw_points[end_idx-1])
+                    dy = arrow_length * math.sin(self.trajectory_tracker.yaw_points[end_idx-1])
+                    ax.arrow(self.trajectory_tracker.x_points[end_idx-1], 
+                            self.trajectory_tracker.y_points[end_idx-1], dx, dy,
+                            head_width=0.01, head_length=0.01, fc='b', ec='b')
+                    
+                    # Desired base position arrow (red)
+                    dx = arrow_length * math.cos(self.trajectory_tracker.goal_yaw[end_idx-1])
+                    dy = arrow_length * math.sin(self.trajectory_tracker.goal_yaw[end_idx-1])
+                    ax.arrow(self.trajectory_tracker.goal_x[end_idx-1], 
+                            self.trajectory_tracker.goal_y[end_idx-1], dx, dy,
+                            head_width=0.01, head_length=0.01, fc='r', ec='r')
+                    
+                    # Current and desired EE positions (larger dots)
+                    ax.scatter(self.ee_tracker.x_points[end_idx-1],
+                              self.ee_tracker.y_points[end_idx-1],
+                              color='g', s=100, marker='o', label='Current EE')
+                    ax.scatter(self.ee_tracker.goal_x[end_idx-1],
+                              self.ee_tracker.goal_y[end_idx-1],
+                              color='m', s=100, marker='o', label='Desired EE')
+            
+            # Plot waypoints if provided
+            if waypoints is not None:
+                waypoint_x, waypoint_y = zip(*waypoints)
+                ax.scatter(waypoint_x, waypoint_y, color='green', s=100, label='Waypoints')
+            
+            ax.set_xlabel('X Position (m)')
+            ax.set_ylabel('Y Position (m)')
+            ax.set_title(f'Robot Trajectory (t={frame/50:.2f}s)')
+            ax.grid(True)
+            ax.axis('equal')
+            ax.legend()
+            
+            # Set consistent axis limits using both base and EE trajectories
+            all_x = (self.trajectory_tracker.goal_x + self.trajectory_tracker.x_points + 
+                    self.ee_tracker.goal_x + self.ee_tracker.x_points)
+            all_y = (self.trajectory_tracker.goal_y + self.trajectory_tracker.y_points + 
+                    self.ee_tracker.goal_y + self.ee_tracker.y_points)
+            ax.set_xlim(min(all_x)-0.1, max(all_x)+0.1)
+            ax.set_ylim(min(all_y)-0.1, max(all_y)+0.1)
+            
+            # Add command text in top-left corner
+            if end_idx > 0:
+                command_text = (
+                    f"Speed: {self.trajectory_tracker.command_speed[end_idx-1]:.1f}\n"
+                    f"Direction: {self.trajectory_tracker.command_dir[end_idx-1]:.1f}\n"
+                    f"Rotation: {self.trajectory_tracker.command_rot[end_idx-1]:.3f}"
+                )
+                ax.text(0.02, 0.98, command_text,
+                       transform=ax.transAxes,
+                       verticalalignment='top',
+                       fontfamily='monospace',
+                       bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
+        
+        # Create animation
+        desired_fps = 50
+        animation_duration = self.trajectory_tracker.time_points[-1]
+        num_frames = int(desired_fps * animation_duration)
+        
+        anim = FuncAnimation(fig, animate, frames=num_frames, 
+                            interval=1000/desired_fps, repeat=False)
+        
+        # Save as MP4
+        writer = FFMpegWriter(fps=50, bitrate=2000)
+        anim.save(save_path, writer=writer)
+        plt.close()

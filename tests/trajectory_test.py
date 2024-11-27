@@ -28,19 +28,19 @@ def main():
         obs = env.get_observation()
         env.add_ee_waypoint(0.0, obs.ee_pose, 0.0)
         x2 = obs.ee_pose.copy()
-        x2[2, 3] -= 0.05
-        x2[0, 3] += 0.2
-        env.add_ee_waypoint(3.0, x2, np.pi*0.3)
-        x3 = x2.copy()
-        x3[2, 3] -= 0.05
-        x3[1, 3] += 0.2
-        env.add_ee_waypoint(6.0, x3, 0)
+        # x2[2, 3] -= 0.05
+        # x2[0, 3] += 0.3
+        env.add_ee_waypoint(30.0, x2, 0.0)
+        # x3 = x2.copy()
+        # x3[2, 3] -= 0.05
+        # x3[1, 3] += 0.2
+        # env.add_ee_waypoint(6.0, x3, 0)
 
         start_time = time.time()
 
-        while time.time() - start_time < 7.0:
+        while time.time() - start_time < 60: #30.0:
             current_time = time.time()
-            print(current_time)
+            # print(current_time)
             env.move_base_trajectory(time.time() - start_time)
             env.move_arm_trajectory(time.time() - start_time)
 
@@ -49,6 +49,10 @@ def main():
                 time.sleep(sleep_time)
 
         env.stop_base()
+
+        waypoints = list(zip(env.base_trajectory.x_points, env.base_trajectory.y_points))  # Convert trajectory waypoints
+        # env.trajectory_tracker.create_animation(waypoints=waypoints)
+        env.create_animation(waypoints=waypoints)
 
         print('done')
     except KeyboardInterrupt:
