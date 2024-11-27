@@ -114,9 +114,9 @@ def main():
             #     print(d)
             #     collect_data(env, 0, 90, d)
             
-            for yaw in [-0.1, -0.2, -0.3]:# [0, 0.1, 0.2, 0.3]:
+            for yaw in [-0.1, -0.2, -0.3, 0, 0.1, 0.2, 0.3]:
                 for direction in [0, 45, 90, 135, 180, 225, 270, 315]: # [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]:
-                    for speed in [0, 20, 40, 60, 80, 90]: # list(range(20)) + list(range(20, 91, 10)):
+                    for speed in [0, 20, 30, 50, 70, 90]: # list(range(20)) + list(range(20, 91, 10)):
                         print(speed, direction, yaw)
                         data_input.append([speed, direction, yaw])
                         result = collect_data(env, speed, direction, yaw)

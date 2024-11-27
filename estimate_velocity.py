@@ -104,16 +104,12 @@ def plot_trajectories(traj, transformed_traj):
     plt.show()
 
 class VelocityMatcher:
-    def __init__(self, data_input, data_result, k=1, weights=[1.0, 1.0, 1.0]):
-        """
-        Initialize the matcher with training data
-        
-        Args:
-            data_input: numpy array of input parameters
-            data_result: list of trajectory results
-            k: number of nearest neighbors to use (default: 5)
-            weights: weights for [vx, vy, vyaw] in distance calculation (default: [1.0, 1.0, 1.0])
-        """
+    def __init__(self, filename, k=1, weights=[1.0, 1.0, 1.0]):
+        with open(filename, 'rb') as f:
+            data = pickle.load(f)
+            data_input = np.array(data['data_input'])
+            data_result = data['data_result']
+
         self.data_input = data_input
         self.velocities = calculate_velocities(data_input, data_result)
         self.weights = np.array(weights)
@@ -159,13 +155,8 @@ def weighted_euclidean(x, y, w):
 
 # Example usage:
 if __name__ == "__main__":
-    with open('robot_movement_data.pkl', 'rb') as f:
-        data = pickle.load(f)
-        data_input = np.array(data['data_input'])
-        data_result = data['data_result']
-
     weights = [1.0, 1.0, 1.0]
-    matcher = VelocityMatcher(data_input, data_result, k=1, weights=weights)
+    matcher = VelocityMatcher('robot_movement_data.pkl', k=1, weights=weights)
     
     # Example: Find nearest neighbor for desired velocity
     target_vx, target_vy, target_vyaw = 0, 0.15, 0

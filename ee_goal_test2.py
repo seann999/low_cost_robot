@@ -84,10 +84,10 @@ def main():
             # ee_pose[2, 3] = np.sin(i * 0.1) * 0.03 + 0.05
             ee_pose = origin.copy()
             # ee_pose[:3, 3] += arm_pose[:3, 0] * np.sin(i * 0.1) * 0.1
-            # ee_pose[:3, 3] += ee_pose[:3, 2] * np.sin(i * 0.1) * 0.05
-            # ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.05
-            rot_z = R.from_euler('z', i, degrees=True).as_matrix()
-            ee_pose[:3, :3] = rot_z @ ee_pose[:3, :3]
+            ee_pose[:3, 3] += ee_pose[:3, 2] * np.sin(i * 0.1) * 0.1
+            ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.1
+            # rot_z = R.from_euler('z', i, degrees=True).as_matrix()
+            # ee_pose[:3, :3] = rot_z @ ee_pose[:3, :3]
 
             for _ in range(5):
                 move_ee_test(ee_pose, False)

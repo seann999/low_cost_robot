@@ -7,16 +7,21 @@ import math
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
 
-def calculate_offset_poses(poses, offset):
-    """Calculate poses with x/y offset based on yaw angle"""
+def calculate_offset_poses(poses, offsets):
+    """Calculate poses with longitudinal and lateral offsets based on yaw angle"""
+    long_offset, lat_offset = offsets
     offset_poses = poses.copy()
-    offset_poses[:, 0] += offset * np.cos(poses[:, 2])  # x += offset * cos(yaw)
-    offset_poses[:, 1] += offset * np.sin(poses[:, 2])  # y += offset * sin(yaw)
+    # Longitudinal offset (forward/backward)
+    offset_poses[:, 0] += long_offset * np.cos(poses[:, 2])
+    offset_poses[:, 1] += long_offset * np.sin(poses[:, 2])
+    # Lateral offset (left/right)
+    offset_poses[:, 0] += lat_offset * np.cos(poses[:, 2] + np.pi/2)
+    offset_poses[:, 1] += lat_offset * np.sin(poses[:, 2] + np.pi/2)
     return offset_poses
 
-def objective_function(offset, poses):
+def objective_function(offsets, poses):
     """Function to minimize - variance of x and y positions"""
-    offset_poses = calculate_offset_poses(poses, offset)
+    offset_poses = calculate_offset_poses(poses, offsets)
     # Calculate variance of x and y coordinates and sum them
     var_x = np.var(offset_poses[:, 0])
     var_y = np.var(offset_poses[:, 1])
@@ -38,35 +43,63 @@ def main():
         # env.stop_base()
         # exit()
 
-        for _ in range(200):
-            env.send_base([0, 0, 0.2])
-            time.sleep(0.1)
-            # env.stop_base()
-            pose = env.tracker.get_latest_position()
-            poses.append([pose['x'], pose['y'], pose['yaw']])
+        for _ in range(3):
+            for _ in range(50):
+                env.send_base([0, 0, 0.2])
+                time.sleep(0.1)
+                # env.stop_base()
+                pose = env.tracker.get_latest_position()
+                poses.append([pose['x'], pose['y'], pose['yaw']])
+            for _ in range(50):
+                env.send_base([0, 0, -0.2])
+                time.sleep(0.1)
+                # env.stop_base()
+                pose = env.tracker.get_latest_position()
+                poses.append([pose['x'], pose['y'], pose['yaw']])
 
         # Convert poses list to numpy array for easier plotting
         poses = np.array(poses)
         env.stop_base()
         
-        # Find optimal offset
-        result = minimize(objective_function, x0=0.0, args=(poses,))
-        optimal_offset = result.x[0]
-        print(f"Optimal offset: {optimal_offset:.3f} meters")
+        # Find optimal offsets (longitudinal and lateral)
+        result = minimize(objective_function, x0=[0.0, 0.0], args=(poses,))
+        optimal_long_offset, optimal_lat_offset = result.x
+        print(f"Optimal longitudinal offset: {optimal_long_offset:.3f} meters")
+        print(f"Optimal lateral offset: {optimal_lat_offset:.3f} meters")
         
         # Calculate offset-corrected poses
-        offset_poses = calculate_offset_poses(poses, optimal_offset)
+        offset_poses = calculate_offset_poses(poses, [optimal_long_offset, optimal_lat_offset])
         
         # Create single comparison plot
-        plt.figure(figsize=(8, 8))
-        plt.scatter(poses[:, 0], poses[:, 1], c='blue', marker='o', label='Original', alpha=0.6)
-        plt.scatter(offset_poses[:, 0], offset_poses[:, 1], c='red', marker='o', label='Offset-corrected', alpha=0.6)
-        plt.xlabel('X Position')
-        plt.ylabel('Y Position')
-        plt.title(f'Trajectory Comparison\n(optimal offset = {optimal_offset:.3f}m)')
-        plt.grid(True)
-        plt.axis('equal')
-        plt.legend()
+        fig, ax = plt.subplots(figsize=(8, 8))
+        
+        # Create color gradients based on time
+        time_colors = np.linspace(0, 1, len(poses))
+        
+        # Plot original trajectory with arrows
+        ax.quiver(poses[:, 0], poses[:, 1], 
+                  np.cos(poses[:, 2]), np.sin(poses[:, 2]),
+                  time_colors, cmap='Blues', 
+                  scale=30, alpha=0.6, label='Original')
+        
+        # Plot offset-corrected trajectory with arrows
+        ax.quiver(offset_poses[:, 0], offset_poses[:, 1],
+                  np.cos(offset_poses[:, 2]), np.sin(offset_poses[:, 2]),
+                  time_colors, cmap='Reds',
+                  scale=30, alpha=0.6, label='Offset-corrected')
+        
+        ax.set_xlabel('X Position')
+        ax.set_ylabel('Y Position')
+        ax.set_title(f'Trajectory Comparison\n(long={optimal_long_offset:.3f}m, lat={optimal_lat_offset:.3f}m)')
+        ax.grid(True)
+        ax.axis('equal')
+        ax.legend()
+        
+        # Fix colorbar by setting array data
+        sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(0, len(poses)))
+        sm.set_array(time_colors)
+        plt.colorbar(sm, ax=ax, label='Time Progress')
+        
         plt.tight_layout()
         plt.show(block=True)
         

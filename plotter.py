@@ -3,6 +3,8 @@ from ikpy.utils.plot import plot_frame
 import numpy as np
 import matplotlib.pyplot as plt
 import json
+from typing import Dict
+
 
 import ikpy
 ikpy.utils.plot.directions_colors = ["red", "green", "blue"]
@@ -15,6 +17,81 @@ class KinematicsPlotter:
     def __init__(self):
         self.figures = {}
         self.axes = {}
+
+    def plot_poses(self, poses_dict: Dict[str, tuple], dots_only=False):
+        """
+        Plot arbitrary number of poses in 3D.
+        
+        Args:
+            poses_dict: Dictionary where
+                - key: name of the pose (str)
+                - value: tuple of (pose_matrix, color)
+        """
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Calculate plot limits
+        all_positions = np.vstack([pose[:3, 3] for pose, _ in poses_dict.values()])
+        min_pos = np.min(all_positions, axis=0)
+        max_pos = np.max(all_positions, axis=0)
+        center = (min_pos + max_pos) / 2
+        
+        # Calculate the range for each axis independently
+        ranges = max_pos - min_pos
+        max_range = np.max(ranges)
+        
+        # Add padding (20% of max_range) to ensure points aren't at the edges
+        padding = max_range * 0.2
+        
+        # Set axis limits for each dimension independently
+        ax.set_xlim(center[0] - max_range/2 - padding, center[0] + max_range/2 + padding)
+        ax.set_ylim(center[1] - max_range/2 - padding, center[1] + max_range/2 + padding)
+        ax.set_zlim(center[2] - max_range/2 - padding, center[2] + max_range/2 + padding)
+        
+        # RGB colors for xyz axes
+        axis_colors = ['red', 'green', 'blue']
+
+        if dots_only:
+            pos = np.array([pose[:3, 3] for pose, _ in poses_dict.values()])
+            ax.scatter(pos[:, 0], pos[:, 1], pos[:, 2], c='red', marker='o')
+        else:
+            for name, (pose, dot_color) in poses_dict.items():
+                # Plot position
+                pos = pose[:3, 3]
+                ax.scatter(pos[0], pos[1], pos[2], c=dot_color, marker='o', label=name)
+                
+                # Plot orientation arrows (using rotation matrix columns)
+                arrow_length = max_range * 0.1  # Scale arrow length relative to plot size
+                for i, axis in enumerate(['x', 'y', 'z']):
+                    direction = pose[:3, i] * arrow_length
+                    ax.quiver(pos[0], pos[1], pos[2],
+                            direction[0], direction[1], direction[2],
+                            color=axis_colors[i], alpha=0.8)
+
+                # Add text label at the end of each arrow
+                ax.text(pos[0], pos[1], pos[2],
+                        name,
+                        color='black',
+                        fontweight='bold')
+        
+        # Set equal aspect ratio by setting axis limits
+        # for dim in [0, 1, 2]:
+        #     mid = center[dim]
+        #     ax.set_xlim(mid - max_range/2, mid + max_range/2)
+        #     ax.set_ylim(mid - max_range/2, mid + max_range/2)
+        #     ax.set_zlim(mid - max_range/2, mid + max_range/2)
+        
+        # Set labels and title
+        ax.set_xlabel('X (red)')
+        ax.set_ylabel('Y (green)')
+        ax.set_zlabel('Z (blue)')
+        ax.set_title('Robot Poses Visualization')
+        ax.legend()
+        
+        # Make the plot more viewable
+        ax.grid(True)
+        
+        plt.show(block=True)
 
     def raw_plot_chain(self, chain, joints, ax, name="chain", other_frames=()):
         """Plot the chain with its rotation and translation axes"""

@@ -1,5 +1,7 @@
 import numpy as np
 import math
+from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Slerp
 
 
 class JointTrajectory:
@@ -143,4 +145,97 @@ class BaseTrajectory:
             'vx': vx,
             'vy': vy,
             'vyaw': vyaw
+        }
+
+
+class PoseMatrixTrajectory:
+    def __init__(self):
+        self.times = []
+        self.poses = []  # List of 4x4 transformation matrices
+    
+    def add_waypoint(self, t, pose):
+        """Add a waypoint at time t with a 4x4 transformation matrix"""
+        # Validate pose matrix
+        pose = np.array(pose)
+        if pose.shape != (4, 4):
+            raise ValueError("Pose must be a 4x4 transformation matrix")
+            
+        # Find where to insert the new waypoint
+        insert_idx = np.searchsorted(self.times, t)
+        
+        # Remove any waypoints that occur after this time
+        self.times = self.times[:insert_idx]
+        self.poses = self.poses[:insert_idx]
+        
+        # Add the new waypoint
+        self.times.append(t)
+        self.poses.append(pose)
+    
+    def get_state(self, t):
+        """
+        Get interpolated state at time t using linear interpolation for translation
+        and spherical linear interpolation (SLERP) for rotation
+        """
+        if len(self.times) < 2:
+            raise ValueError("Need at least 2 waypoints")
+            
+        # If beyond last waypoint, return last pose with zero velocity
+        if t >= self.times[-1]:
+            return {
+                'pose': self.poses[-1],
+                'linear_velocity': np.zeros(3),
+                'angular_velocity': np.zeros(3)
+            }
+            
+        # Find the two waypoints we're between
+        next_idx = np.searchsorted(self.times, t)
+        prev_idx = next_idx - 1
+        
+        # Get time segment and interpolation factor
+        t0, t1 = self.times[prev_idx], self.times[next_idx]
+        alpha = (t - t0) / (t1 - t0)
+        dt = t1 - t0
+        
+        # Extract poses
+        pose0 = self.poses[prev_idx]
+        pose1 = self.poses[next_idx]
+        
+        # Separate translation and rotation
+        trans0 = pose0[:3, 3]
+        trans1 = pose1[:3, 3]
+        rot0 = pose0[:3, :3]
+        rot1 = pose1[:3, :3]
+        
+        # Linear interpolation for translation
+        translation = trans0 + alpha * (trans1 - trans0)
+        
+        # Calculate linear velocity
+        linear_velocity = (trans1 - trans0) / dt
+        
+        # Convert rotation matrices to quaternions for SLERP
+        r0 = Rotation.from_matrix(rot0)
+        r1 = Rotation.from_matrix(rot1)
+        
+        # Perform SLERP
+        times = [0, 1]
+        key_rots = Rotation.from_matrix([rot0, rot1])
+        slerp = Slerp(times, key_rots)
+        r_interp = slerp([alpha])[0]
+        rotation = r_interp.as_matrix()
+        
+        # Calculate angular velocity (in axis-angle representation)
+        r_diff = r0.inv() * r1
+        angle = r_diff.magnitude()
+        axis = r_diff.as_rotvec() / angle if angle > 0 else np.zeros(3)
+        angular_velocity = (angle / dt) * axis
+        
+        # Construct interpolated pose
+        pose = np.eye(4)
+        pose[:3, :3] = rotation
+        pose[:3, 3] = translation
+        
+        return {
+            'pose': pose,
+            'linear_velocity': linear_velocity,
+            'angular_velocity': angular_velocity
         }

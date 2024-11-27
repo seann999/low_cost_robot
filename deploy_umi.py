@@ -11,7 +11,7 @@ from copy import deepcopy
 from scipy.spatial.transform import Rotation as R
 
 from robot import Robot
-from robot_wrapper import RobotEnv, joints_to_pose, pose_to_joints, cam_move_to_ee, plotter, robot_arm_chain, camera2gripper
+from robot_wrapper import RobotEnv, joints_to_posemat, pose7d_to_joints, cam_move_to_ee, plotter, robot_arm_chain, camera2gripper
 
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.common.replay_buffer import ReplayBuffer
@@ -206,20 +206,8 @@ def main():
     history = []
 
     try:
-        # Initialize robot and environment
-        # leader = Robot(device_name='/dev/ttyACM0')
-        # leader.set_trigger_torque()
-        
         env = RobotEnv()
         env.connect()
-
-        # [2003, 1619, 1306, 3049, 1992, 2834]
-        # init_config = [2005, 1834, 1505, 3196, 2147, 2853]
-        init_config = [2088, 2071, 1773, 3058, 2078, 2890]
-        env.move_to_joints(init_config, duration=1.0)
-
-        while env.get_observation().image is None:
-            time.sleep(0.1)
 
         for _ in range(10):
             history.append(process_observation(env.get_observation()))
