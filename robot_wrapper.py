@@ -19,7 +19,7 @@ from scipy.spatial.transform import Rotation as R
 from phone import PhoneTracker
 from trajectory import BaseTrajectory, JointTrajectory, PoseMatrixTrajectory
 
-from umi.common.pose_util import mat_to_pose10d, rot6d_to_mat
+# from umi.common.pose_util import mat_to_pose10d, rot6d_to_mat
 import json
 
 
@@ -65,6 +65,36 @@ robot_arm_chain = Chain.from_urdf_file(modified_urdf)
 
 from plotter import KinematicsPlotter
 plotter = KinematicsPlotter()
+
+
+# copied from UMI
+def mat_to_pose10d(mat):
+    pos = mat[...,:3,3]
+    rotmat = mat[...,:3,:3]
+    d6 = mat_to_rot6d(rotmat)
+    d10 = np.concatenate([pos, d6], axis=-1)
+    return d10
+
+
+def pose_to_pos_rot(pose):
+    pos = pose[...,:3]
+    rot = st.Rotation.from_rotvec(pose[...,3:])
+    return pos, rot
+
+
+def pose_to_mat(pose):
+    return pos_rot_to_mat(*pose_to_pos_rot(pose))
+
+
+def pos_rot_to_mat(pos, rot):
+    shape = pos.shape[:-1]
+    mat = np.zeros(shape + (4,4), dtype=pos.dtype)
+    mat[...,:3,3] = pos
+    mat[...,:3,:3] = rot.as_matrix()
+    mat[...,3,3] = 1
+    return mat
+
+###
 
 
 def pose7d_to_matrix(pose):
