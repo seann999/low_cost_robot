@@ -78,7 +78,7 @@ def mat_to_pose10d(mat):
 
 def pose_to_pos_rot(pose):
     pos = pose[...,:3]
-    rot = st.Rotation.from_rotvec(pose[...,3:])
+    rot = R.from_rotvec(pose[...,3:])
     return pos, rot
 
 
