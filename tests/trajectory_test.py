@@ -4,7 +4,7 @@ from robot_wrapper import RobotEnv, plotter
 import numpy as np
 import math
 import csv
-from estimate_velocity import VelocityMatcher
+# from estimate_velocity import VelocityMatcher
 import matplotlib.pyplot as plt
 from scipy.interpolate import interp1d
 from matplotlib.animation import FuncAnimation, FFMpegWriter
