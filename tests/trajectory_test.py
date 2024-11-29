@@ -35,10 +35,10 @@ def main():
         for i in range(300):
             # ee_pose[2, 3] = np.sin(i * 0.1) * 0.03 + 0.05
             ee_pose = origin.copy()
-            rot_z = R.from_euler('z', i * 1, degrees=True).as_matrix()
-            ee_pose[:3, :3] = rot_z @ ee_pose[:3, :3]
-            # ee_pose[:3, 3] += ee_pose[:3, 2] * np.sin(i * 0.1) * 0.1
-            # ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.1
+            # rot_z = R.from_euler('z', i * 1, degrees=True).as_matrix()
+            # ee_pose[:3, :3] = rot_z @ ee_pose[:3, :3]
+            ee_pose[:3, 3] += ee_pose[:3, 2] * np.sin(i * 0.1) * 0.1
+            ee_pose[:3, 3] += ee_pose[:3, 0] * np.cos(i * 0.1) * 0.1
             env.add_ee_waypoint(0.1 * i, ee_pose, 0.0)
 
         start_time = time.time()
