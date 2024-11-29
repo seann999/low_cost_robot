@@ -449,13 +449,20 @@ class RobotEnv:
         new_world_base_pose[:3, 1] = phone_z_vec
         new_world_base_pose[:3, 0] = np.cross(new_world_base_pose[:3, 1], new_world_base_pose[:3, 2])
 
-        # poses = dict(
-        #     phone=(phone_pose, 'red'),
-        #     base=(world_base_pose, 'blue'),
-        #     new_base=(new_world_base_pose, 'green'),
-        # )
+        poses = dict(
+            phone=(phone_pose, 'red'),
+            base=(world_base_pose, 'blue'),
+            new_base=(new_world_base_pose, 'green'),
+        )
+        self.calib_phone_pose = phone_pose
+        self.calib_world_base_pose = new_world_base_pose
+        self.calib_new_world_base_pose = new_world_base_pose
         # plotter.plot_poses(poses)
         T_phone2base = np.linalg.inv(new_world_base_pose) @ phone_pose
+
+        # print('distance A:', np.linalg.norm(new_world_base_pose[:3, 3] - phone_pose[:3, 3]))
+        # print('phone_pose:', phone_pose)
+        # print('new_world_base_pose:', new_world_base_pose)
 
         return T_phone2base
 
@@ -478,7 +485,7 @@ class RobotEnv:
                 if frame is not None:
                     local_ee_pose = joints_to_posemat(follower_joints, camera_frame=False)
                     phone_pose = self.tracker.full_pose.copy()
-                    world_base_pose = phone_pose @ self.T_phone2base
+                    world_base_pose = phone_pose @ np.linalg.inv(self.T_phone2base)
                     world_ee_pose = world_base_pose @ local_ee_pose
                     world_cam_pose = world_ee_pose @ camera2gripper
                     
@@ -649,7 +656,8 @@ class RobotEnv:
         return obs.arm_base_pose, obs.ee_pose, obs.phone_pose
 
     def move_arm_base_to(self, goal_arm_pose, wait_base=True, timeout=30, **kwargs):
-        goal_phone_pose = goal_arm_pose @ np.linalg.inv(self.T_phone2base)
+        # goal_phone_pose = goal_arm_pose @ np.linalg.inv(self.T_phone2base)
+        goal_phone_pose = goal_arm_pose @ self.T_phone2base
         goal_xyt = self.tracker.calculate_xyt(goal_phone_pose)
 
         start_time = time.time()
@@ -809,7 +817,8 @@ class RobotEnv:
 
         arm_base_pose, _, _ = self.get_world_pose()
         goal_arm_base_pose = self.generate_goal_arm_pose(goal_ee_pose, arm_base_pose[2, 3])
-        goal_phone_pose = goal_arm_base_pose @ np.linalg.inv(self.T_phone2base)
+        # goal_phone_pose = goal_arm_base_pose @ np.linalg.inv(self.T_phone2base)
+        goal_phone_pose = goal_arm_base_pose @ self.T_phone2base
         goal_xyt = self.tracker.calculate_xyt(goal_phone_pose)
         self.base_trajectory.add_waypoint(t, goal_xyt['x'], goal_xyt['y'], goal_xyt['yaw'])
         
