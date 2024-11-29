@@ -520,10 +520,17 @@ class RobotEnv:
         with self._lock:
             return self.latest_observation
 
+    def gripper_rad_to_joint(self, gripper_rad):
+        return int(gripper_rad / np.pi * 2048 + 2048)
+
+    def get_gripper_rad(self):
+        gripper_joint = self.get_observation().joints[-1]
+        return (gripper_joint - 2048) * np.pi / 2048
+
     def calculate_joints(self, pose_matrix, gripper_rad=0):
         current_joints = self.get_observation().joints
         pose7d = matrix_to_pose7d(pose_matrix)
-        gripper_joint = int(gripper_rad / np.pi * 2048 + 2048)
+        gripper_joint = self.gripper_rad_to_joint(gripper_rad)
         joints = pose7d_to_joints(pose7d, gripper_joint, initial_position=current_joints)
         return joints
 
@@ -815,7 +822,7 @@ class RobotEnv:
         try:
             goal_joints = self.arm_trajectory.get_state(t)
             goal_ee_pose = self.pose_trajectory.get_state(t)['pose']
-        except ValueError:
+        except ValueError as e:
             return
 
         # positions = np.round(goal_joints['position']).astype(int).tolist()
@@ -835,7 +842,7 @@ class RobotEnv:
 
         try:
             goal = self.base_trajectory.get_state(t)
-        except ValueError:
+        except ValueError as e:
             return
 
         curr_x = base_state['x']
