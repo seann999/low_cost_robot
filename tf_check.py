@@ -32,11 +32,18 @@ def main():
 
         poses = dict()
         obs = env.get_observation()
-        poses['origin'] = (np.eye(4), 'black')
+        # poses['origin'] = (np.eye(4), 'black')
         poses['cam_pose'] = (obs.cam_pose, 'black')
         poses['ee_pose'] = (obs.ee_pose, 'black')
         poses['arm_base_pose'] = (obs.arm_base_pose, 'black')
         poses['phone_pose'] = (obs.phone_pose, 'black')
+        # poses['calib_phone_pose'] = (env.calib_phone_pose, 'black')
+        # poses['calib_world_base_pose'] = (env.calib_world_base_pose, 'black')
+        poses['calib_new_world_base_pose'] = (env.calib_new_world_base_pose, 'black')
+
+        print('distance B:', np.linalg.norm(obs.arm_base_pose[:3, 3] - obs.phone_pose[:3, 3]))
+        print('arm_base_pose:', obs.arm_base_pose)
+        print('phone_pose:', obs.phone_pose)
 
         # plotter.plot_poses({k: v for k, v in poses.items() if k.startswith('desired_ee')})
         plotter.plot_poses(poses)
