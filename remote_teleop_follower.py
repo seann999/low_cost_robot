@@ -38,6 +38,13 @@ cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 cap.set(cv2.CAP_PROP_FPS, 30)
 
+# Add this after the webcam setup
+# Create a dummy frame with the same dimensions
+dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+# Add some text to indicate it's a dummy frame
+cv2.putText(dummy_frame, 'No Camera Feed', (200, 240), 
+            cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
 def receive_position_data(conn, follower, running):
     while running[0]:
         try:
@@ -82,40 +89,43 @@ try:
             current_pos = follower.read_position()
             ret, frame = cap.read()
             
-            if ret:
-                # Compress frame to JPEG
-                _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
-                img_bytes = img_encoded.tobytes()
+            # Use dummy frame if camera read fails
+            if not ret or frame is None:
+                frame = dummy_frame.copy()
+            
+            # Compress frame to JPEG
+            _, img_encoded = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
+            img_bytes = img_encoded.tobytes()
+            
+            # Create response packet
+            response = {
+                'position': current_pos,
+            }
+            response_json = json.dumps(response).encode()
+            
+            try:
+                # Send position data with size header
+                conn.send(len(response_json).to_bytes(4, byteorder='big'))
+                conn.send(response_json)
                 
-                # Create response packet
-                response = {
-                    'position': current_pos,
-                }
-                response_json = json.dumps(response).encode()
-                
-                try:
-                    # Send position data with size header
-                    conn.send(len(response_json).to_bytes(4, byteorder='big'))
-                    conn.send(response_json)
-                    
-                    # Send image data with size header
-                    conn.send(len(img_bytes).to_bytes(4, byteorder='big'))
-                    conn.send(img_bytes)
-                except (BrokenPipeError, ConnectionResetError):
-                    print("Client disconnected. Waiting for new connection...")
-                    conn.close()
-                    # Stop the position thread
-                    running[0] = False
-                    position_thread.join()
-                    # Get new connection
-                    conn, addr = accept_connection()
-                    # Restart position thread
-                    running[0] = True
-                    position_thread = threading.Thread(
-                        target=receive_position_data, 
-                        args=(conn, follower, running)
-                    )
-                    position_thread.start()
+                # Send image data with size header
+                conn.send(len(img_bytes).to_bytes(4, byteorder='big'))
+                conn.send(img_bytes)
+            except (BrokenPipeError, ConnectionResetError):
+                print("Client disconnected. Waiting for new connection...")
+                conn.close()
+                # Stop the position thread
+                running[0] = False
+                position_thread.join()
+                # Get new connection
+                conn, addr = accept_connection()
+                # Restart position thread
+                running[0] = True
+                position_thread = threading.Thread(
+                    target=receive_position_data, 
+                    args=(conn, follower, running)
+                )
+                position_thread.start()
             
             # Reduced sleep time
             time.sleep(0.01)  # ~100fps max
